@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+chainlit
+langchain-google-genai
+langchain-mistralai
