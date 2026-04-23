@@ -3,3 +3,7 @@ uvicorn
 chainlit
 langchain-google-genai
 langchain-mistralai
+langchain-openai
+beautifulsoup4
+faiss-cpu
+langchain-community
