@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Dict, Any, Optional, List
 from bs4 import BeautifulSoup
-from app.core.rag_config import VECTORIZED_FIELDS, METADATA_FIELDS
+from app.config import VECTORIZED_FIELDS, METADATA_FIELDS
 
 logger = logging.getLogger(__name__)
 
