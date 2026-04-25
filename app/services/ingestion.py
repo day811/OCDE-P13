@@ -85,7 +85,7 @@ class OpenAgendaIngestor:
 
 
         params: Dict[str, Any] = {
-            "where": f'updatedat >= "{after_ts}"  AND ',
+            "where": f'updatedat >= "{after_ts}"  AND {location_filter}',
             "order": f"updatedat ASC",
             "limit": self.page_size,
             "offset": offset
