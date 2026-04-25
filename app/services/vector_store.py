@@ -48,7 +48,7 @@ class VectorStoreService:
 
     def add_events(self, transformed_events: List[Dict[str, Any]]) -> None:
         """
-        Adds a batch of events to the store.
+        Adds a batch of events to the store (cumulative/incremental).
         Args:
             transformed_events (List[Dict[str, Any]]): List of processed events.
         """
@@ -57,12 +57,28 @@ class VectorStoreService:
 
         texts: List[str] = [e['content'] for e in transformed_events]
         metadatas: List[Dict[str, Any]] = [e['metadata'] for e in transformed_events]
+        vector_db_path: str = "data/faiss_index"
 
         if self.env == "AZURE":
             store = self._get_store()
             if store:
                 store.add_texts(texts, metadatas=metadatas)
         else:
-            store = self._get_store(texts, metadatas)
-            if isinstance(store, FAISS):
-                store.save_local("data/faiss_index")
+            # --- LOGIQUE LOCALE CUMULATIVE ---
+            if os.path.exists(os.path.join(vector_db_path, "index.faiss")):
+                # 1. On charge l'index existant
+                store = FAISS.load_local(
+                    vector_db_path, 
+                    self.embeddings, 
+                    allow_dangerous_deserialization=True
+                )
+                # 2. On ajoute les nouveaux vecteurs à l'objet chargé
+                store.add_texts(texts, metadatas=metadatas)
+                logger.info(f"Added {len(texts)} events to existing local index.")
+            else:
+                # 1. On crée le tout premier index
+                store = FAISS.from_texts(texts, self.embeddings, metadatas=metadatas)
+                logger.info(f"Created new local index with {len(texts)} events.")
+
+            # 3. On sauvegarde (écrase le fichier par la version augmentée en RAM)
+            store.save_local(vector_db_path)

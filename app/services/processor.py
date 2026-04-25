@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from bs4 import BeautifulSoup
 from app.config import VECTORIZED_FIELDS, METADATA_FIELDS
+from app.schemas.event import EventSchema
 
 logger = logging.getLogger(__name__)
 
@@ -72,41 +73,38 @@ class EventProcessor:
         return parsed_timings
 
     @classmethod
-    def transform(cls, raw_event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def transform(cls, raw_record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Transforms a raw ODS record into a structured document for the Vector Store.
+        Validates and transforms raw record into Silver format.
         Args:
-            raw_event (Dict[str, Any]): Raw record from ODS results.
+            raw_record (Dict[str, Any]): Data from ODS results.
         Returns:
-            Optional[Dict[str, Any]]: Transformed dictionary or None.
+            Optional[Dict[str, Any]]: Validated document for indexing.
         """
         try:
-            # 1. Build Vectorized Content
-            content_parts: List[str] = []
-            for field in VECTORIZED_FIELDS:
-                val: Any = cls.get_nested_value(raw_event, field)
-                if val:
-                    content_parts.append(f"{field.upper()}: {cls.clean_text(val)}")
+            # 1. Validation via Pydantic
+            event = EventSchema(**raw_record)
             
-            if not content_parts:
-                return None
-
-            # 2. Build Metadata
-            metadata: Dict[str, Any] = {}
-            for field in METADATA_FIELDS:
-                if field == "timings":
-                    # Specific treatment for timings verification
-                    metadata["parsed_timings"] = cls.parse_timings(raw_event.get("timings"))
-                    # We also keep the raw string for reference
-                    metadata["timings"] = str(raw_event.get("timings", ""))
-                else:
-                    metadata[field] = cls.get_nested_value(raw_event, field)
+            # 2. Construction du contenu pour embedding (Vectorized Fields)
+            # On utilise les attributs de l'objet 'event' validé
+            content_parts = [
+                f"TITRE: {event.title_fr}",
+                f"DESCRIPTION: {cls.clean_text(event.description_fr)}",
+                f"VILLE: {event.location_city}",
+                f"CONDITIONS: {cls.clean_text(event.conditions_fr)}"
+            ]
+            
+            # 3. Préparation des métadonnées pour FAISS/index.pkl
+            # IMPORTANT: C'est ici qu'on assure la persistence des meta
+            metadata = event.dict() 
+            # On transforme la liste de timings en format JSON string pour FAISS si besoin
+            metadata['timings'] = json.dumps([t.dict() for t in event.timings])
 
             return {
-                "id": str(raw_event.get('uid', '')),
+                "id": event.uid,
                 "content": "\n".join(content_parts),
                 "metadata": metadata
             }
         except Exception as e:
-            logger.error(f"Transformation failed: {e}")
+            # logger.debug(f"Validation failed for event: {e}")
             return None
