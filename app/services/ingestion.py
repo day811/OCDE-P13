@@ -118,8 +118,32 @@ class OpenAgendaIngestor:
                 transformed_batch.append(transformed)
         
         if transformed_batch:
+            self.save_to_silver(transformed_batch)
             self.vector_store.add_events(transformed_batch)
-            logger.info(f"Successfully indexed {len(transformed_batch)} events.")
+            logger.info(f"Successfully processed {len(transformed_batch)} events.")
+
+    def save_to_bronze(self, batch: List[Dict[str, Any]], offset: int) -> None:
+        """
+        Saves raw API response to the Bronze layer.
+        Args:
+            batch (List[Dict[str, Any]]): Raw results from ODS.
+            offset (int): Current offset for filename.
+        """
+        path = Path(f"data/bronze/batch_{datetime.now().strftime('%Y%m%d')}_{offset}.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(batch, f, ensure_ascii=False, indent=4)
+
+    def save_to_silver(self, validated_events: List[Dict[str, Any]]) -> None:
+        """
+        Saves validated/cleaned metadata to the Silver layer (JSONL format).
+        """
+        path = Path(f"data/silver/events_{datetime.now().strftime('%Y%m%d')}.jsonl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'a', encoding='utf-8') as f:
+            for item in validated_events:
+                # On sauvegarde uniquement la partie metadata (Silver data)
+                f.write(json.dumps(item['metadata'], ensure_ascii=False) + "\n")
 
 
     def run(self, max_total: Optional[int] = None) -> None:
@@ -142,7 +166,11 @@ class OpenAgendaIngestor:
                     keep_running = False
                     break
 
+                # POINT 2 (Suite): Utilisation de save_to_bronze
+                self.save_to_bronze(batch, offset)
+
                 self.process_and_index(batch)
+                
                 total_processed += len(batch)
                 
                 # Update watermark based on the last record's updatedat
@@ -150,11 +178,7 @@ class OpenAgendaIngestor:
                 if last_event_ts:
                     self._update_manifest(last_event_ts, total_processed)
 
-                if len(batch) < self.page_size:
-                    keep_running = False
-                    break
-                
-                if max_total and total_processed >= max_total:
+                if len(batch) < self.page_size or (max_total and total_processed >= max_total):
                     keep_running = False
                     break
 
