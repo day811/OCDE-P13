@@ -56,3 +56,28 @@ class SettingsStorageService:
         except Exception as e:
             logger.error(f"Failed to save settings for {user_id}: {e}")
             return False
+        
+
+    def update_usage(self, user_id: str, prompt_tokens: int, completion_tokens: int) -> Dict[str, int]:
+        """
+        Updates and returns the cumulative token usage for a specific user.
+        """
+        usage_path = self.base_path / f"usage_{user_id}.json"
+        
+        # Load existing usage or start from zero
+        if usage_path.exists():
+            with open(usage_path, 'r', encoding='utf-8') as f:
+                usage = json.load(f)
+        else:
+            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+        # Increment
+        usage["prompt_tokens"] += prompt_tokens
+        usage["completion_tokens"] += completion_tokens
+        usage["total_tokens"] += (prompt_tokens + completion_tokens)
+
+        # Save
+        with open(usage_path, 'w', encoding='utf-8') as f:
+            json.dump(usage, f, indent=4)
+        
+        return usage
