@@ -1,4 +1,5 @@
 fastapi
+pandas
 uvicorn
 chainlit
 langchain-google-genai
