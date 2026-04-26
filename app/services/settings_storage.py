@@ -60,7 +60,13 @@ class SettingsStorageService:
 
     def update_usage(self, user_id: str, prompt_tokens: int, completion_tokens: int) -> Dict[str, int]:
         """
-        Updates and returns the cumulative token usage for a specific user.
+        Updates and returns cumulative token usage for a specific user.
+        Args:
+            user_id (str): Unique user identifier.
+            prompt_tokens (int): Tokens from the prompt.
+            completion_tokens (int): Tokens from the model response.
+        Returns:
+            Dict[str, int]: Updated usage statistics.
         """
         usage_path = self.base_path / f"usage_{user_id}.json"
         
@@ -76,7 +82,7 @@ class SettingsStorageService:
         usage["completion_tokens"] += completion_tokens
         usage["total_tokens"] += (prompt_tokens + completion_tokens)
 
-        # Save
+        # Persist to local JSON (Silver layer for user data)
         with open(usage_path, 'w', encoding='utf-8') as f:
             json.dump(usage, f, indent=4)
         

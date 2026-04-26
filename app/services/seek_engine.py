@@ -146,8 +146,22 @@ class SeekEngine:
         # Invoke the LLM 
         answer = self.llm.invoke(prompt).content
 
+        # --- TOKEN ACCOUNTING ---
+
+        usage_metadata = response.response_metadata.get("token_usage", {})
+        
+        # Mapping for Gemini/OpenAI
+        p_tokens = usage_metadata.get("prompt_token_count") or usage_metadata.get("prompt_tokens", 0)
+        c_tokens = usage_metadata.get("candidates_token_count") or usage_metadata.get("completion_tokens", 0)
+
+        # Enregistrement via le service de stockage
+        
         return {
             "answer": answer,
             "sources": [e["metadata"] for e in validated_entries],
-            "constraints": {**geo_constraints, "date": target_date.isoformat()}
+            "usage": {
+                "prompt": p_tokens,
+                "completion": c_tokens,
+                "total": p_tokens + c_tokens
+            }
         }

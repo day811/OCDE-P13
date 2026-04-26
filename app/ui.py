@@ -77,7 +77,7 @@ async def setup_agent(settings):
     if processed_settings.get("favorite_dept") == "Aucun":
         processed_settings["favorite_dept"] = None
         
-    storage.save_settings(user.identifier, processed_settings)
+    storage.save_settings(user.identifier, processed_settings) # type: ignore
     cl.user_session.set("settings", processed_settings)
     
     await cl.Message(content="✅ Préférences mises à jour.").send()
@@ -85,13 +85,24 @@ async def setup_agent(settings):
 @cl.on_message
 async def main(message: cl.Message):
     engine = cl.user_session.get("engine")
+    user = cl.user_session.get("user")
     user_settings = cl.user_session.get("settings")
-        
+    storage = cl.user_session.get("settings_service")
+    
     # Execute RAG
-    res = engine.search(
+    res = engine.search( # type: ignore
         message.content, 
-        default_city=user_settings.get("favorite_city"),
-        default_dept=user_settings.get("favorite_dept")
+        fav_city=user_settings.get("favorite_city"), # type: ignore
+        fav_dept=user_settings.get("favorite_dept") # type: ignore
     )    
-    # Send answer
-    await cl.Message(content=res["answer"]).send()
+    # 2. Accounting : Mise à jour persistante
+    usage = res.get("usage", {"prompt": 0,"completion": 0,"total": 0})
+    cumulative = storage.update_usage( # type: ignore
+        user.identifier,  # type: ignore
+        usage.get("prompt", 0), 
+        usage.get("completion", 0)
+    )
+
+    # 3. Affichage (Optionnel : petit texte discret en bas de réponse)
+    footer = f"\n\n*(Consommation : {usage['total']} tokens | Cumul : {cumulative['total_tokens']})*"
+    await cl.Message(content=res["answer"] + footer).send()
