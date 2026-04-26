@@ -2,12 +2,14 @@ import os
 import json
 import logging
 import requests
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from app.services.processor import EventProcessor
 from app.services.vector_store import VectorStoreService
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class OpenAgendaIngestor:
@@ -31,8 +33,27 @@ class OpenAgendaIngestor:
         self.processor = EventProcessor()
         self.vector_store = VectorStoreService()
         self.env=os.getenv("ENV", "LOCAL").upper()
- 
 
+        self.stats = {"total_raw": 0, "silver_valid": 0, "skipped": 0}
+        self._load_manifest_data()
+
+    def _load_manifest_data(self) -> None:
+        """
+        Loads the high watermark and cumulative stats from the JSON manifest.
+        """
+        if self.manifest_path.exists():
+            try:
+                with open(self.manifest_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Load historical stats if they exist in the file
+                    historical_stats = data.get("stats", {})
+                    for key in self.stats:
+                        self.stats[key] = historical_stats.get(key, 0)
+                    
+                    logger.info(f"Manifest loaded. Current cumulative stats: {self.stats}")
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"Failed to read manifest for stats: {e}")
+    
     def _get_start_timestamp(self) -> str:
         """
         Retrieves the last processed timestamp from manifest or defaults to 13 months ago.
@@ -61,7 +82,8 @@ class OpenAgendaIngestor:
         data: Dict[str, Any] = {
             "last_updated_at": timestamp,
             "total_processed_session": count,
-            "last_run": datetime.now().isoformat()
+            "last_run": datetime.now().isoformat(),
+            "stats": self.stats
         }
         self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.manifest_path, 'w') as f:
@@ -86,7 +108,7 @@ class OpenAgendaIngestor:
 
         params: Dict[str, Any] = {
             "where": f'updatedat >= "{after_ts}"  AND {location_filter}',
-            "order": f"updatedat ASC",
+            "order_by": f"updatedat ASC",
             "limit": self.page_size,
             "offset": offset
         }
@@ -111,12 +133,16 @@ class OpenAgendaIngestor:
             events (List[Dict[str, Any]]): Raw records to process.
         """
         transformed_batch = []
-        
+        self.stats["total_raw"] += len(events)
+
         for raw_event in events:
             transformed = self.processor.transform(raw_event)
             if transformed:
-                transformed_batch.append(transformed)
-        
+                transformed_batch.extend(transformed)
+                self.stats["silver_valid"] += 1
+            else:
+                self.stats["skipped"] += 1
+
         if transformed_batch:
             self.save_to_silver(transformed_batch)
             self.vector_store.add_events(transformed_batch)
@@ -129,7 +155,7 @@ class OpenAgendaIngestor:
             batch (List[Dict[str, Any]]): Raw results from ODS.
             offset (int): Current offset for filename.
         """
-        path = Path(f"data/bronze/batch_{datetime.now().strftime('%Y%m%d')}_{offset}.json")
+        path = Path(f"data/bronze/batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{offset}.json")
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(batch, f, ensure_ascii=False, indent=4)
@@ -142,7 +168,6 @@ class OpenAgendaIngestor:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'a', encoding='utf-8') as f:
             for item in validated_events:
-                # On sauvegarde uniquement la partie metadata (Silver data)
                 f.write(json.dumps(item['metadata'], ensure_ascii=False) + "\n")
 
 
@@ -157,6 +182,12 @@ class OpenAgendaIngestor:
         keep_running: bool = True
 
         logger.info(f"Starting ODS ingestion from: {current_watermark}")
+        safe_delay:float
+        if self.env == "AZURE":
+            safe_delay=0
+        else:
+            safe_delay=2
+
 
         while keep_running:
             for offset in range(0, self.records_per_watermark, self.page_size):
@@ -181,7 +212,8 @@ class OpenAgendaIngestor:
                 if len(batch) < self.page_size or (max_total and total_processed >= max_total):
                     keep_running = False
                     break
-
+                print(f"Pause de {safe_delay} secondes ...")
+                time.sleep(safe_delay)
             if keep_running and 'last_event_ts' in locals():
                 current_watermark = last_event_ts # type: ignore
                 logger.debug(f"Watermark shifted to {current_watermark}")

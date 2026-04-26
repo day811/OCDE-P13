@@ -48,37 +48,52 @@ class VectorStoreService:
 
     def add_events(self, transformed_events: List[Dict[str, Any]]) -> None:
         """
-        Adds a batch of events to the store (cumulative/incremental).
+        Adds a batch of events to the store with Upsert logic (Delete if exists, then Add).
         Args:
-            transformed_events (List[Dict[str, Any]]): List of processed events.
+            transformed_events (List[Dict[str, Any]]): List of processed events. 
         """
         if not transformed_events:
             return
 
+        vector_db_path: str = "data/faiss_index"
+        store = None
+
+        # --- LOCAL UPSERT PREPARATION ---
+        # If we are in local mode and an index exists, we find internal IDs to delete them
+        if self.env != "AZURE" and os.path.exists(os.path.join(vector_db_path, "index.faiss")):
+            store = FAISS.load_local(vector_db_path, self.embeddings, allow_dangerous_deserialization=True) # 
+            
+            # Parent UIDs to refresh
+            incoming_parent_uids = {str(e['metadata'].get('uid')) for e in transformed_events}
+            
+            # Find all internal IDs where metadata 'uid' matches any incoming parent UID
+            ids_to_delete = [
+                f_id for f_id, doc in store.docstore._dict.items() # type: ignore
+                if str(doc.metadata.get('uid')) in incoming_parent_uids
+            ]
+            
+            if ids_to_delete:
+                logger.info(f"Gold Layer: Removing {len(ids_to_delete)} old chunks for update.")
+                store.delete(ids_to_delete)
+        
+        # Prepare data for all events (no filtering, to allow modified events to be updated)
         texts: List[str] = [e['content'] for e in transformed_events]
         metadatas: List[Dict[str, Any]] = [e['metadata'] for e in transformed_events]
-        vector_db_path: str = "data/faiss_index"
 
         if self.env == "AZURE":
-            store = self._get_store()
+            store = self._get_store() 
             if store:
+                # Azure Search automatically handles upserts if the 'uid' is the document key
                 store.add_texts(texts, metadatas=metadatas)
+                logger.info(f"Azure Layer: Upserted {len(transformed_events)} events.")
         else:
-            # --- LOGIQUE LOCALE CUMULATIVE ---
-            if os.path.exists(os.path.join(vector_db_path, "index.faiss")):
-                # 1. On charge l'index existant
-                store = FAISS.load_local(
-                    vector_db_path, 
-                    self.embeddings, 
-                    allow_dangerous_deserialization=True
-                )
-                # 2. On ajoute les nouveaux vecteurs à l'objet chargé
+            if store: 
+                # Add new/updated versions to the already loaded store 
                 store.add_texts(texts, metadatas=metadatas)
-                logger.info(f"Added {len(texts)} events to existing local index.")
             else:
-                # 1. On crée le tout premier index
-                store = FAISS.from_texts(texts, self.embeddings, metadatas=metadatas)
-                logger.info(f"Created new local index with {len(texts)} events.")
+                # Create a brand new index if none existed 
+                store = self._get_store(texts, metadatas)
 
-            # 3. On sauvegarde (écrase le fichier par la version augmentée en RAM)
-            store.save_local(vector_db_path)
+            if isinstance(store, FAISS):
+                store.save_local(vector_db_path)
+                logger.info(f"Gold Layer: Successfully indexed/updated {len(transformed_events)} events in FAISS.")

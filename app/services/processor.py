@@ -1,8 +1,8 @@
-import json
+import json, re
 import logging
-from typing import Dict, Any, Optional, List
-from bs4 import BeautifulSoup
-from app.config import VECTORIZED_FIELDS, METADATA_FIELDS
+from typing import Dict, Any, Optional, List, Tuple
+
+from app.config import VECTORIZED_FIELDS
 from app.schemas.event import EventSchema
 
 logger = logging.getLogger(__name__)
@@ -26,13 +26,31 @@ class EventProcessor:
         return data.get(path)
 
     @staticmethod
-    def clean_text(text: Any) -> str:
-        """Removes HTML and normalizes whitespaces."""
-        if not isinstance(text, str) or not text:
-            return ""
-        soup = BeautifulSoup(text, "html.parser")
-        return " ".join(soup.get_text(separator=" ").split())
-
+    def split_text(text: str, chunk_size: int = 600) -> List[str]:
+        """
+        Restored P11 logic: Splits text into semantic chunks.
+        """
+        if len(text) <= chunk_size:
+            return [text]
+        
+        # Split on sentences to preserve meaning
+        parts = re.split(r'(?<=[.!?]) +', text)
+        chunks = []
+        current_chunk = ""
+        
+        for part in parts:
+            if len(current_chunk) + len(part) <= chunk_size:
+                current_chunk += " " + part
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = part
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        return chunks
+    
+  
     @staticmethod
     def parse_timings(timings_raw: Any) -> List[Dict[str, str]]:
         """
@@ -82,29 +100,32 @@ class EventProcessor:
             Optional[Dict[str, Any]]: Validated document for indexing.
         """
         try:
-            # 1. Validation via Pydantic
+            # 1. Validation via Pydantic 
             event = EventSchema(**raw_record)
             
-            # 2. Construction du contenu pour embedding (Vectorized Fields)
-            # On utilise les attributs de l'objet 'event' validé
-            content_parts = [
-                f"TITRE: {event.title_fr}",
-                f"DESCRIPTION: {cls.clean_text(event.description_fr)}",
-                f"VILLE: {event.location_city}",
-                f"CONDITIONS: {cls.clean_text(event.conditions_fr)}"
-            ]
+            # 2. Build full content for chunking
+            full_content = (
+                f"TITRE: {event.title_fr}\n"
+                f"VILLE: {event.location_city}\n"
+                f"DESCRIPTION: {event.description_fr}\n"
+                f"CONDITIONS: {event.description_fr}"
+            )
             
-            # 3. Préparation des métadonnées pour FAISS/index.pkl
-            # IMPORTANT: C'est ici qu'on assure la persistence des meta
-            metadata = event.dict() 
-            # On transforme la liste de timings en format JSON string pour FAISS si besoin
-            metadata['timings'] = json.dumps([t.dict() for t in event.timings])
+            # 3. Create Chunks
+            text_chunks = cls.split_text(full_content)
+            
+            # 4. Common metadata preparation 
+            metadata = event.dict()
+            if isinstance(event.timings, List):
+                metadata['timings'] = json.dumps([t.dict() for t in event.timings])
 
-            return {
-                "id": event.uid,
-                "content": "\n".join(content_parts),
-                "metadata": metadata
-            }
+            # Return a list of chunk objects
+            return [{
+                "id": f"{event.uid}_{i}", # Unique ID per chunk
+                "content": chunk,
+                "metadata": metadata # Every chunk carries the full event metadata
+            } for i, chunk in enumerate(text_chunks)] # type: ignore
+
         except Exception as e:
             # logger.debug(f"Validation failed for event: {e}")
             return None
