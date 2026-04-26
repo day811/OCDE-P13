@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional, Dict, Any
 import json
+from bs4 import BeautifulSoup
 
 class EventTiming(BaseModel):
     start: str
@@ -27,13 +28,46 @@ class EventSchema(BaseModel):
     canonicalurl: Optional[str] = ""
     timings: Optional[List[EventTiming]] = []
 
-    @validator('timings', pre=True)
-    def parse_timings_field(cls, v):
-        """ Parses the timings string from ODS into a list of EventTiming objects. """
+    @field_validator('timings', mode='before')
+    @classmethod
+    def parse_timings_field(cls, v: Any) -> Any:    
+        """
+        Pydantic v2 field validator. Parses the timings string from ODS 
+        into a list of EventTiming objects.
+        """
         if isinstance(v, str):
             try:
-                data = json.loads(v)
-                return [{"start": t.get('start') or t.get('begin'), "end": t.get('end')} for t in data]
-            except:
+                raw_data = json.loads(v)
+                return [
+                    {"start": t.get('start') or t.get('begin'), "end": t.get('end')} 
+                    for t in raw_data
+                ]
+            except (json.JSONDecodeError, TypeError):
                 return []
-        return v
+        return v    
+       
+    @model_validator(mode= 'before')
+    @classmethod
+    def extract_nested_coordinates(cls, data: Any) -> Any:
+        """
+        Pydantic v2 model validator. Extracts lat and lon from 
+        location_coordinates before field assignment.
+        """
+        if isinstance(data, dict):
+            coords = data.get('location_coordinates')
+            if isinstance(coords, dict):
+                # Ensure values are mapped to root fields for persistence
+                if data.get('location_lat') is None:
+                    data['location_lat'] = coords.get('lat')
+                if data.get('location_lon') is None:
+                    data['location_lon'] = coords.get('lon')
+        return data
+    
+    @field_validator('title_fr', 'description_fr', 'conditions_fr', mode='before')
+    @classmethod
+    def clean_html_fields(cls, v: Any) -> str:
+        """ Removes HTML tags from any string field. """
+        if not isinstance(v, str) or not v.strip():
+            return ""
+        # BeautifulSoup processes text (urls included) safely
+        return " ".join(BeautifulSoup(v, "html.parser").get_text(separator=" ").split())
