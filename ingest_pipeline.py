@@ -14,7 +14,7 @@ def run_test():
     ingestor = OpenAgendaIngestor()
     
     # We limit to 5 events to check the logic and the FAISS save
-    ingestor.run(max_total=5)
+    ingestor.run(max_total=5000)
     print("--- Test Complete ---")
 
 if __name__ == "__main__":
