@@ -13,7 +13,7 @@ class LLMFactory:
         if env == "AZURE":
             return AzureChatOpenAI(
                 azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
-                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"), # type: ignore
                 azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
                 temperature=0
