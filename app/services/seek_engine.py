@@ -61,30 +61,44 @@ class SeekEngine:
         
         return (len(matching_dates) > 0), matching_dates
 
-    def search(self, user_query: str, top_k: int = 5) -> Dict[str, Any]:
+
+    def search(self, user_query: str, 
+               fav_city: Optional[str] = None, 
+               fav_dept: Optional[str] = None,
+               top_k: int = 5
+               ) -> Dict[str, Any]:
         """
         Full RAG pipeline: Parsing -> Broad Vector Search -> Filtering -> Conversational Generation.
         Includes an updated prompt for a warmer and more advisory tone.
         """
-        # 1. Extract constraints 
+        # 1. Extract constraints from query
         target_date, tolerance = self.parser.parse_date(user_query)
         geo_constraints = self.parser.parse_geo(user_query)
 
-        # 2. Broad search 
-        store = self.vector_store._get_store()
-        if not store:
-            return {"answer": "Error: Vector store not available.", "sources": []}
-            
-        raw_candidates = store.similarity_search(user_query, k=top_k*30)
+        # 2. Logic: Fallback and Query Augmentation
+        has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
+        
+        effective_city = geo_constraints["city"] if has_explicit_geo else fav_city
+        effective_dept = geo_constraints["dept"] if has_explicit_geo else fav_dept        
+        # We create a specific query for the vector search
+        search_query = user_query
+        if not has_explicit_geo:
+            if effective_city: search_query += f" dans la ville de {effective_city}"
+            elif effective_dept: search_query += f" dans le département de {effective_dept}"
+        
+        geo_filter = {"city": effective_city, "dept": effective_dept}
 
-        # 3. Iteration and Validation using the dedicated function
+        # 3. Broad search 
+        store = self.vector_store._get_store()
+        if not store: return {"answer": "Error: Store unavailable.", "sources": []}
+            
+        raw_candidates = store.similarity_search(search_query, k=top_k*20)
+
+        # 4. Validation Layer using the updated geo_constraints 
         validated_entries = []
         for doc in raw_candidates:
             is_valid, matching_dates = self._validate_event(
-                doc.metadata, 
-                target_date, 
-                tolerance, 
-                geo_constraints
+                doc.metadata, target_date, tolerance, geo_filter
             )
             
             if is_valid:
@@ -101,10 +115,9 @@ class SeekEngine:
                     "metadata": doc.metadata
                 })
             
-            if len(validated_entries) >= top_k: 
-                break
+            if len(validated_entries) >= top_k: break
 
-        # 4. LLM Generation (Augmentation with Personality)
+        # 5. LLM Generation (Augmentation with Personality)
         if not validated_entries:
             return {
                 "answer": "Oh mince ! Je n'ai déniché aucun événement correspondant exactement à tes critères pour le moment. "
@@ -127,7 +140,7 @@ class SeekEngine:
             "- Mentionne impérativement les dates qui correspondent à sa recherche pour chaque événement.\n"
             "- Termine par un petit mot d'esprit ou une suggestion globale.\n\n"
             f"CONTEXTE DES ÉVÉNEMENTS :\n{final_context}\n\n"
-            f"QUESTION DE L'UTILISATEUR : {user_query}"
+            f"QUESTION DE L'UTILISATEUR : {search_query}"
         )
         
         # Invoke the LLM 
