@@ -63,7 +63,7 @@ class EventSchema(BaseModel):
                     data['location_lon'] = coords.get('lon')
         return data
     
-    @field_validator('title_fr', 'description_fr', 'conditions_fr', mode='before')
+    @field_validator('longdescription_fr', 'description_fr', 'conditions_fr', mode='before')
     @classmethod
     def clean_html_fields(cls, v: Any) -> str:
         """ Removes HTML tags from any string field. """
