@@ -8,6 +8,7 @@ chunks.json
 tagged_chats/*.json
 .chainlit/*
 chainlit.md
+notebooks/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
