@@ -1,10 +1,10 @@
 ## Context
-[cite_start]Puls-Events is transitioning its semantic search engine from a POC (Proof of Concept) to a scalable MVP (Minimum Viable Product)[cite: 91, 101]. [cite_start]The goal is to provide a real-time platform for discovering cultural events across France based on user preferences.
+Puls-Events is transitioning its semantic search engine from a POC (Proof of Concept) to a scalable MVP (Minimum Viable Product). The goal is to provide a real-time platform for discovering cultural events across France based on user preferences.
 
 ## Business Objectives
-* [cite_start]Deliver a unique, scalable, and high-performance solution for the events market[cite: 160].
-* [cite_start]Enhance user experience through hyper-personalization[cite: 159].
-* [cite_start]Demonstrate technical maturity for the Data Engineer portfolio[cite: 113, 164].
+* Deliver a unique, scalable, and high-performance solution for the events market.
+* Enhance user experience through hyper-personalization.
+* Demonstrate technical maturity for the Data Engineer portfolio.
 
 ## Technical Requirements & Constraints
 * **UI/UX:** Migration to ChainLit with an integrated query API.
