@@ -7,6 +7,7 @@ from app.services.query_parser import QueryParser
 from app.core.llm_factory import LLMFactory
 from app.config import get_unique_locations
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SeekEngine:
@@ -87,6 +88,7 @@ class SeekEngine:
             elif effective_dept: search_query += f" dans le département de {effective_dept}"
         
         geo_filter = {"city": effective_city, "dept": effective_dept}
+        logger.info(f"Date: {str(target_date)} + {str(tolerance)}j - City: {effective_city} - Dept: {effective_dept}")
 
         # 3. Broad search 
         store = self.vector_store._get_store()
@@ -106,8 +108,10 @@ class SeekEngine:
                 refined_context = (
                     f"ÉVÉNEMENT: {doc.metadata.get('title_fr')}\n"
                     f"DATES PERTINENTES: {', '.join(matching_dates)}\n"
-                    f"LIEU: {doc.metadata.get('location_city')}, {doc.metadata.get('location_address')}\n"
-                    f"DESCRIPTION: {doc.page_content}\n"
+                    f"LIEU:  {doc.metadata.get('location_name')} : {doc.metadata.get('location_city')}, {doc.metadata.get('location_address')}\n"
+                    f"DESCRIPTION: {doc.metadata.get('description_fr')} -- {doc.metadata.get('longdescription_fr')}\n"
+                    f"CONDITIONS: {doc.metadata.get('conditions_fr')}\n"
+                    f"URL: {doc.metadata.get('canonicalurl')}\n"
                 )
                 
                 validated_entries.append({
@@ -142,26 +146,27 @@ class SeekEngine:
             f"CONTEXTE DES ÉVÉNEMENTS :\n{final_context}\n\n"
             f"QUESTION DE L'UTILISATEUR : {search_query}"
         )
-        
+        logger.info(f"Prompt :\n{prompt}")
         # Invoke the LLM 
-        answer = self.llm.invoke(prompt).content
+        answer = self.llm.invoke(prompt)
 
         # --- TOKEN ACCOUNTING ---
 
-        usage_metadata = response.response_metadata.get("token_usage", {})
+        usage_metadata = answer.usage_metadata
         
         # Mapping for Gemini/OpenAI
-        p_tokens = usage_metadata.get("prompt_token_count") or usage_metadata.get("prompt_tokens", 0)
-        c_tokens = usage_metadata.get("candidates_token_count") or usage_metadata.get("completion_tokens", 0)
+        
+        input_tokens = usage_metadata.get("input_tokens",0) if isinstance(usage_metadata,dict) else 0
+        output_tokens = usage_metadata.get("candidates_token_count",0) if isinstance(usage_metadata,dict) else 0
 
         # Enregistrement via le service de stockage
         
         return {
-            "answer": answer,
+            "answer": answer.content,
             "sources": [e["metadata"] for e in validated_entries],
             "usage": {
-                "prompt": p_tokens,
-                "completion": c_tokens,
-                "total": p_tokens + c_tokens
+                "prompt": input_tokens,
+                "completion": output_tokens,
+                "total": input_tokens + output_tokens
             }
         }
