@@ -1,6 +1,8 @@
-import os
+import os, dotenv
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings
+
+dotenv.load_dotenv()
 
 class EmbeddingFactory:
     @staticmethod
