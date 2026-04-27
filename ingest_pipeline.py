@@ -2,8 +2,7 @@ import os
 import logging
 from app.services.ingestion import OpenAgendaIngestor
 
-from app.config import LOG_LEVEL
-logging.basicConfig(level=LOG_LEVEL)
+logger = logging.getLogger(__name__)
 
 def run_test():
     """
