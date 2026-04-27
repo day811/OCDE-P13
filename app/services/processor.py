@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from app.config import VECTORIZED_FIELDS
 from app.schemas.event import EventSchema
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class EventProcessor:
@@ -102,17 +103,21 @@ class EventProcessor:
         try:
             # 1. Validation via Pydantic 
             event = EventSchema(**raw_record)
+            event_data = event.model_dump()
             
-            # 2. Build full content for chunking
-            full_content = (
-                f"TITRE: {event.title_fr}\n"
-                f"VILLE: {event.location_city}\n"
-                f"DESCRIPTION: {event.description_fr}\n"
-                f"CONDITIONS: {event.description_fr}"
-            )
+            # 2. Dynamically build content based on VECTORIZED_FIELDS from config.py
+            # This ensures that Title, Long Description, and Location details are in the vector
+            content_parts = []
+            for field in VECTORIZED_FIELDS:
+                value = event_data.get(field)
+                if value:
+                    # Prefixing with field name helps the LLM and the embedding context
+                    content_parts.append(f"{field.upper()}: {value}")
+
+            full_vectorizable_text = "\n".join(content_parts)
             
             # 3. Create Chunks
-            text_chunks = cls.split_text(full_content)
+            text_chunks = cls.split_text(full_vectorizable_text)
             
             # 4. Common metadata preparation 
             metadata = event.dict()
