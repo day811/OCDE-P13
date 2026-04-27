@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional, Union
 from langchain_community.vectorstores import FAISS, AzureSearch
 from app.core.embedding_factory import EmbeddingFactory
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class VectorStoreService:
