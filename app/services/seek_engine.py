@@ -6,9 +6,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from app.services.vector_store import VectorStoreService
 from app.services.query_parser import QueryParser
 from app.core.llm_factory import LLMFactory
-from app.config import get_unique_locations
+from app.config import get_unique_locations, LOG_LEVEL
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 class SeekEngine:
@@ -148,7 +148,8 @@ class SeekEngine:
                chat_history: List[Dict[str, str]] = [],
                fav_city: Optional[str] = None, 
                fav_dept: Optional[str] = None, 
-               top_k: int = 5) -> Dict[str, Any]:
+               top_k: int = 5
+               ) -> Dict[str, Any]:
         """
         Main entry point for the RAG search.
         """
@@ -170,13 +171,13 @@ class SeekEngine:
             elif effective_dept: search_query += f" dans le département de {effective_dept}"
         
         logger.info(f"Searching for: {search_query}")
-
+        logger.info(f"Date: {str(target_date)} + {str(tolerance)}j - City: {effective_city} - Dept: {effective_dept}")
         # 3. Vector Search
         store = self.vector_store._get_store()
         if not store:
             return {"answer": "Error: Vector store unavailable.", "sources": []}
             
-        raw_candidates = store.similarity_search(search_query, k=top_k * 10)
+        raw_candidates = store.similarity_search(search_query, k=top_k * 30)
 
         # 4. Filter and build context
         validated_entries = []
@@ -195,6 +196,9 @@ class SeekEngine:
 
         # 5. Generate final response
         full_context = "\n---\n".join([e["block"] for e in validated_entries])
+        logger.debug(f"Query: {user_query} ")
+        logger.debug(f"Full context: {full_context} ")
+        logger.debug(f"Chat history: {chat_history} ")
         answer_obj, generation_usage = self._generate_answer(user_query, full_context, chat_history)
 
         # 6. Total Accounting
