@@ -4,9 +4,9 @@ import pandas as pd
 from datetime import datetime, timedelta
 from calendar import monthrange
 from typing import Optional, Dict, Tuple, List
-import app.config 
 
-logging.basicConfig(level=logging.INFO)
+from app.config import LOG_LEVEL
+logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 class QueryParser:

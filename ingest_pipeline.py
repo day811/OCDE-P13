@@ -2,8 +2,8 @@ import os
 import logging
 from app.services.ingestion import OpenAgendaIngestor
 
-# Force debug logging
-logging.basicConfig(level=logging.DEBUG)
+from app.config import LOG_LEVEL
+logging.basicConfig(level=LOG_LEVEL)
 
 def run_test():
     """

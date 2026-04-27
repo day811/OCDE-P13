@@ -3,6 +3,9 @@ import json
 import pandas as pd
 from pathlib import Path
 from typing import List, Set
+import logging
+
+LOG_LEVEL=logging.INFO
 
 # ============= FIELDS =============
 UID = "uid"
