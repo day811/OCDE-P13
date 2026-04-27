@@ -56,7 +56,7 @@ async def start():
     ]).send()
 
     cl.user_session.set("settings", user_settings)
-    
+    cl.user_session.set("chat_history", [])
     cl.user_session.set("engine", SeekEngine())
     cl.user_session.set("settings_service", settings_service)
 
@@ -85,16 +85,24 @@ async def setup_agent(settings):
 @cl.on_message
 async def main(message: cl.Message):
     engine = cl.user_session.get("engine")
+    history:list = cl.user_session.get("chat_history") # type: ignore
     user = cl.user_session.get("user")
-    user_settings = cl.user_session.get("settings")
+    user_settings:dict = cl.user_session.get("settings") # type: ignore
     storage = cl.user_session.get("settings_service")
     
-    # Execute RAG
+    # 1. Search with history
     res = engine.search( # type: ignore
-        message.content, 
-        fav_city=user_settings.get("favorite_city"), # type: ignore
-        fav_dept=user_settings.get("favorite_dept") # type: ignore
+        user_query=message.content,
+        user_id=user.identifier, # type: ignore
+        chat_history=history,
+        fav_city=user_settings.get("favorite_city"),
+        fav_dept=user_settings.get("favorite_dept")
     )    
+    # 2. Update local history (Sliding window of last 10 messages)
+    history.append({"role": "user", "content": message.content})
+    history.append({"role": "assistant", "content": res["answer"]})
+    cl.user_session.set("chat_history", history[-10:])
+    
     # 2. Accounting : Mise à jour persistante
     usage = res.get("usage", {"prompt": 0,"completion": 0,"total": 0})
     cumulative = storage.update_usage( # type: ignore
