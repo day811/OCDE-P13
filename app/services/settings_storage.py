@@ -2,10 +2,10 @@ import json
 import os
 import logging
 from pathlib import Path
-from app.config import LOG_LEVEL
+
 from typing import Dict, Any, Optional
 
-logging.basicConfig(level=LOG_LEVEL)
+
 logger = logging.getLogger(__name__)
 
 class SettingsStorageService:

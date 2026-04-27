@@ -9,8 +9,6 @@ from typing import List, Dict, Any, Optional
 from app.services.processor import EventProcessor
 from app.services.vector_store import VectorStoreService
 
-from app.config import LOG_LEVEL
-logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 class OpenAgendaIngestor:

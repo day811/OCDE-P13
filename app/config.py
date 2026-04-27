@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import List, Set
 import logging
 
-LOG_LEVEL=logging.INFO
 
 # ============= FIELDS =============
 UID = "uid"
@@ -32,6 +31,32 @@ VECTORIZED_FIELDS = [TITLE, DESC, LONG_DESC, CONDITIONS, LOC_NAME, LOC_CITY, LOC
 
 # Fields to be kept as metadata for filtering (Azure AI Search / OData)
 METADATA_FIELDS = [UID, UPDATE, TITLE, DESC, LONG_DESC, LOC_NAME, LOC_DEPT, LOC_CITY, LOC_REGION, LOC_ADDRESS, CONDITIONS, URL, TIMINGS, LOC_COORD ]
+
+def setup_logging() -> None:
+    """
+    Initializes global logging configuration using environment variables.
+    The 'force=True' parameter ensures this config overrides any default 
+    settings from third-party libraries.
+    """
+    # Retrieve log level from environment or default to INFO
+    log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+    
+    # Map string to logging constants
+    level = getattr(logging, log_level_str, logging.INFO)
+
+    # Global configuration for the root logger
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        force=True  # Important: overrides settings from other libs like Chainlit
+    )
+    
+    # Internal logger to confirm initialization
+    root_logger = logging.getLogger("app.config")
+    root_logger.info(f"Logging system initialized at {log_level_str} level.")
+
+# Trigger the setup immediately when app.config is imported
+setup_logging()
 
 def get_unique_locations() -> tuple[List[str], List[str]]:
     """

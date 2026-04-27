@@ -6,9 +6,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from app.services.vector_store import VectorStoreService
 from app.services.query_parser import QueryParser
 from app.core.llm_factory import LLMFactory
-from app.config import get_unique_locations, LOG_LEVEL
+from app.config import get_unique_locations
 
-logging.basicConfig(level=LOG_LEVEL)
+
 logger = logging.getLogger(__name__)
 
 class SeekEngine:

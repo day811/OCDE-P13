@@ -2,10 +2,9 @@ import json, re
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 
-from app.config import VECTORIZED_FIELDS, LOG_LEVEL
+from app.config import VECTORIZED_FIELDS
 from app.schemas.event import EventSchema
 
-logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 class EventProcessor:

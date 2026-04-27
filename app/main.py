@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from app.services.seek_engine import SeekEngine
 
+
 app = FastAPI(title="Puls-Events API")
 engine = SeekEngine()
 
