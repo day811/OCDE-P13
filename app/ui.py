@@ -1,7 +1,7 @@
 import chainlit as cl
 import os
 from app.services.seek_engine import SeekEngine
-from app.services.settings_storage import SettingsStorageService
+from app.services.storage.settings_storage import SettingsStorageService
 from chainlit.input_widget import Select, Slider
 from app.config import get_unique_locations
 
