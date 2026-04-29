@@ -8,3 +8,4 @@ langchain-openai
 beautifulsoup4
 faiss-cpu
 langchain-community
+azure-storage-blob
