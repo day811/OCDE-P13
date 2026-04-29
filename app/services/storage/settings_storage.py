@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from typing import Dict, Any, Optional
-
+from app.services.storage.storage_factory import StorageFactory
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +15,16 @@ class SettingsStorageService:
     """
 
     def __init__(self):
-        self.base_path = Path("data/user_data/settings")
-        self.base_path.mkdir(parents=True, exist_ok=True)
-        self.env = os.getenv("ENV", "LOCAL").upper()
+        self.storage = StorageFactory.get_storage()
+        self.container_name = "settings"
 
-    def _get_user_path(self, user_id: str) -> Path:
-        """ Returns the file path for a specific user. """
-        return self.base_path / f"settings_{user_id}.json"
+    def _get_settings_filename(self, user_id: str) -> str:
+        """ Returns the filename for user settings. """
+        return f"settings_{user_id}.json"
+
+    def _get_usage_filename(self, user_id: str) -> str:
+        """ Returns the filename for user token usage. """
+        return f"usage_{user_id}.json"
 
     def get_settings(self, user_id: str) -> Dict[str, Any]:
         """
@@ -31,18 +34,18 @@ class SettingsStorageService:
         Returns:
             Dict[str, Any]: User preferences.
         """
-        if self.env == "AZURE":
-            # Placeholder for Azure Table Storage logic
-            pass
+        filename = self._get_settings_filename(user_id)
+        data = self.storage.download_json(self.container_name, filename)
         
-        path = self._get_user_path(user_id)
-        if path.exists():
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+        if data:
+            return data
         
-        # Default settings
-        return {"favorite_city": None, "radius_km": 20, "theme": "light"}
-
+        # Default settings if no file is found
+        return {
+            "favorite_city": None,
+            "favorite_dept": None,
+            "radius_km": 20
+        }
     def save_settings(self, user_id: str, settings: Dict[str, Any]) -> bool:
         """
         Persists user settings.
@@ -50,15 +53,8 @@ class SettingsStorageService:
             user_id (str): Unique identifier.
             settings (Dict[str, Any]): Data to store.
         """
-        try:
-            path = self._get_user_path(user_id)
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, indent=4)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save settings for {user_id}: {e}")
-            return False
-        
+        filename = self._get_settings_filename(user_id)
+        return self.storage.upload_json(self.container_name, filename, settings)       
 
     def update_usage(self, user_id: str, prompt_tokens: int, completion_tokens: int) -> Dict[str, int]:
         """
@@ -70,22 +66,21 @@ class SettingsStorageService:
         Returns:
             Dict[str, int]: Updated usage statistics.
         """
-        usage_path = self.base_path / f"usage_{user_id}.json"
+        filename = self._get_usage_filename(user_id)
         
-        # Load existing usage or start from zero
-        if usage_path.exists():
-            with open(usage_path, 'r', encoding='utf-8') as f:
-                usage = json.load(f)
-        else:
-            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        # Try to download existing usage or start from zero
+        usage = self.storage.download_json(self.container_name, filename) or {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+        }
 
         # Increment
         usage["prompt_tokens"] += prompt_tokens
         usage["completion_tokens"] += completion_tokens
         usage["total_tokens"] += (prompt_tokens + completion_tokens)
 
-        # Persist to local JSON (Silver layer for user data)
-        with open(usage_path, 'w', encoding='utf-8') as f:
-            json.dump(usage, f, indent=4)
-        
+        # Persist back to storage (Local file or Azure Blob)
+        self.storage.upload_json(self.container_name, filename, usage)
+                
         return usage
