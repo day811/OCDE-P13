@@ -85,3 +85,18 @@ def get_unique_locations() -> tuple[List[str], List[str]]:
                     continue
                 
     return sorted(list(cities)), sorted(list(depts))
+
+def normalize_str(text:str) -> str:
+    location = text.strip().lower()
+    """ Remove accents from text """
+    accents = { 'a': ['à', 'ã', 'á', 'â'],
+                'e': ['é', 'è', 'ê', 'ë'],
+                'i': ['î', 'ï'],
+                'u': ['ù', 'ü', 'û'],
+                'o': ['ô', 'ö'],
+                ' ': ['-','/'] 
+                }
+    for (char, accented_chars) in accents.items():
+        for accented_char in accented_chars:
+            location = location.replace(accented_char, char)
+    return location  
