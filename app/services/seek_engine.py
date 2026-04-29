@@ -1,4 +1,5 @@
 import json
+import os
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -6,7 +7,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from app.services.vector_store import VectorStoreService
 from app.services.query_parser import QueryParser
 from app.core.llm_factory import LLMFactory
-from app.config import get_unique_locations
+from app.config import get_unique_locations,normalize_str
 
 
 logger = logging.getLogger(__name__)
@@ -42,12 +43,13 @@ class SeekEngine:
 
         history_str = "\n".join([f"{m['role']}: {m['content']}" for m in chat_history[-3:]])
         prompt = (
-            f"Given the conversation below, rephrase the follow-up question "
-            f"into a standalone search query in French.\n\n"
+            f"Given the conversation history and the follow-up question, rewrite it as a "
+            f"complete and standalone sentence in French. \n"
+            f"IMPORTANT: Use natural language (e.g., 'au mois de...', 'à Toulouse'). \n"
+            f"DO NOT use keywords only.\n\n"
             f"History:\n{history_str}\n"
             f"Follow-up: {user_query}\n"
-            f"Standalone Query:"
-        )
+            f"Standalone sentence in French:"        )
         
         response = self.llm.invoke(prompt)
         usage = response.usage_metadata
@@ -66,9 +68,9 @@ class SeekEngine:
         dept: str = meta.get("location_department", "")
 
         # 1. Geographic Validation
-        if geo_constraints["city"] and geo_constraints["city"].upper() != city.upper():
+        if geo_constraints["city"] and normalize_str(geo_constraints["city"]) != normalize_str(city):
             return False, []
-        if geo_constraints["dept"] and geo_constraints["dept"].upper() != dept.upper():
+        if geo_constraints["dept"] and normalize_str(geo_constraints["dept"]) != normalize_str(dept):
             return False, []
 
         # 2. Temporal Validation
@@ -148,38 +150,43 @@ class SeekEngine:
                chat_history: List[Dict[str, str]] = [],
                fav_city: Optional[str] = None, 
                fav_dept: Optional[str] = None, 
-               top_k: int = 5
-               ) -> Dict[str, Any]:
+               top_k: int = 5) -> Dict[str, Any]:
         """
-        Main entry point for the RAG search.
+        Main RAG pipeline entry point.
         """
-        # 1. Handle conversation context (Query Condensation)
+        # 1. Condensation Step
+        # This now returns a clean sentence like "Je cherche des rencontres sportives en juin"
         standalone_query, condensation_usage = self._condense_query(user_query, chat_history)
+        logger.info(f"Condensed query: {standalone_query}")
 
-        # 2. Extract constraints and determine filters
+        # 2. Parsing Step
+        # The QueryParser now works on the standalone_query which contains all context
         target_date, tolerance = self.parser.parse_date(standalone_query)
         geo_constraints = self.parser.parse_geo(standalone_query)
 
+        # 3. Geo Fallback Logic
+        # Only use favorites if NO geographic info was found in the standalone query
         has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
         effective_city = geo_constraints["city"] if has_explicit_geo else fav_city
         effective_dept = geo_constraints["dept"] if has_explicit_geo else fav_dept
         
-        # Build search query for vector retrieval
+        # Build augmented search query for vector retrieval
         search_query = standalone_query
         if not has_explicit_geo:
-            if effective_city: search_query += f" dans la ville de {effective_city}"
-            elif effective_dept: search_query += f" dans le département de {effective_dept}"
+            if effective_city: search_query += f" à {effective_city}"
+            elif effective_dept: search_query += f" en {effective_dept}"
         
-        logger.info(f"Searching for: {search_query}")
         logger.info(f"Date: {str(target_date)} + {str(tolerance)}j - City: {effective_city} - Dept: {effective_dept}")
         # 3. Vector Search
         store = self.vector_store._get_store()
         if not store:
-            return {"answer": "Error: Vector store unavailable.", "sources": []}
+            return {"answer": "Error: Store unavailable.", "sources": []}
+        
+        multiplier = 10 if os.getenv('ENV', 'LOCAL') != 'LOCAL' else 40
             
-        raw_candidates = store.similarity_search(search_query, k=top_k * 30)
-
-        # 4. Filter and build context
+        raw_candidates = store.similarity_search(search_query, k=top_k * multiplier)
+        
+        # Filter loop using validated dates and location
         validated_entries = []
         geo_filter = {"city": effective_city, "dept": effective_dept}
         
@@ -191,17 +198,17 @@ class SeekEngine:
             if len(validated_entries) >= top_k:
                 break
 
+        # 5. Final Answer Generation
         if not validated_entries:
-            return {"answer": "Désolé, je n'ai trouvé aucun événement.", "sources": []}
+            return {"answer": "Désolé, aucun événement trouvé pour cette période.", "sources": []}
 
-        # 5. Generate final response
         full_context = "\n---\n".join([e["block"] for e in validated_entries])
         logger.debug(f"Query: {user_query} ")
         logger.debug(f"Full context: {full_context} ")
         logger.debug(f"Chat history: {chat_history} ")
         answer_obj, generation_usage = self._generate_answer(user_query, full_context, chat_history)
 
-        # 6. Total Accounting
+        # 6. Usage Accounting
         total_input = condensation_usage["input"] + generation_usage["input"]
         total_output = condensation_usage["output"] + generation_usage["output"]
 
