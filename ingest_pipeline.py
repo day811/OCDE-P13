@@ -1,20 +1,22 @@
 import os
-import logging
-from app.services.ingestion import OpenAgendaIngestor
+import asyncio
+import dotenv
+from app.services.ingestion_service import IngestionService
 
-logger = logging.getLogger(__name__)
+dotenv.load_dotenv()
 
-def run_test():
+async def main():
     """
-    Test the ingestion pipeline with a very small batch.
+    Main entry point for the ingestion pipeline.
+    Usage: 
+    - LOCAL: Fetches Occitanie, saves to files, indexes in FAISS.
+    - AZURE: Fetches France, saves to Blobs, indexes in Azure AI Search.
     """
-
-    print("--- Starting Debug Test (Max 5 events) ---")
-    ingestor = OpenAgendaIngestor()
+    ingestor = IngestionService()
     
-    # We limit to 5 events to check the logic and the FAISS save
-    ingestor.run(max_total=5000)
-    print("--- Test Complete ---")
+    # Example: Run a batch of 500 events
+    # To run the full national ingestion, remove the limit
+    await ingestor.run(max_records=500)
 
 if __name__ == "__main__":
-    run_test()
+    asyncio.run(main())

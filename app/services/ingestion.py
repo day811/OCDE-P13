@@ -4,10 +4,11 @@ import logging
 import requests
 import time
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import List, Dict, Any, Optional
+
 from app.services.processor import EventProcessor
 from app.services.vector_store import VectorStoreService
+from app.services.storage.storage_factory import StorageFactory
 
 logger = logging.getLogger(__name__)
 
@@ -23,18 +24,24 @@ class OpenAgendaIngestor:
         Args:
             manifest_path (str): Path to the persistent JSON manifest file.
         """
-        self.manifest_path: Path = Path(manifest_path)
-        self.base_url: str = os.getenv("OPENAGENDA_URL", "")
-        self.page_size: int = 100
-        # ODS supports high offsets, but we still use the High Watermark for reliability
-        self.records_per_watermark: int = 10000
-
+        self.env = os.getenv("ENV", "LOCAL").upper()
+        self.storage = StorageFactory.get_storage()
         self.processor = EventProcessor()
         self.vector_store = VectorStoreService()
-        self.env=os.getenv("ENV", "LOCAL").upper()
+        
+        # ODS Configuration
+        self.base_url = os.getenv("OPENAGENDA_URL", "")
+        self.page_size = 100
+        self.batch_limit = 10000 # Max records to check per session
+        
+        # Containers/Folders names
+        self.container_data = "bronze" if self.env == "AZURE" else "bronze"
+        self.container_settings = "settings"
+        self.manifest_file = "ingestion_manifest.json"
 
-        self.stats = {"total_raw": 0, "silver_valid": 0, "skipped": 0}
-        self._load_manifest_data()
+        self.today = datetime.now().date()
+        self.stats = {"total_raw": 0, "indexed": 0, "skipped": 0}
+
 
     def _load_manifest_data(self) -> None:
         """
