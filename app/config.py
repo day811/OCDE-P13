@@ -2,9 +2,9 @@ import os
 import json
 import pandas as pd
 from pathlib import Path
-from typing import List, Set
+from typing import List, Set, Tuple
 import logging
-
+from azure.storage.blob import BlobServiceClient
 
 # ============= FIELDS =============
 UID = "uid"
@@ -58,33 +58,46 @@ def setup_logging() -> None:
 # Trigger the setup immediately when app.config is imported
 setup_logging()
 
-def get_unique_locations() -> tuple[List[str], List[str]]:
+def get_unique_locations() -> Tuple[List[str], List[str]]:
     """
-    Scans the Silver Layer (JSONL) to extract unique cities and departments.
-    This should be called once during SeekEngine initialization.
+    Retrieves unique cities and departments. 
+    Scans local files in LOCAL mode or Azure Blobs in AZURE mode.
     """
-    silver_path = Path("data/silver")
+    env = os.getenv("ENV", "LOCAL").upper()
     cities: Set[str] = set()
     depts: Set[str] = set()
-    
-    # We look for the most recent silver file
-    files = sorted(silver_path.glob("events_*.jsonl"), reverse=True)
-    if not files:
-        return [], []
-    
-    for file_path in silver_path.glob("events_*.jsonl"):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                try:
+
+    if env == "AZURE":
+        # Cloud logic: Scan the 'silver' container
+        connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        if not connection_string:
+            return [], []
+        
+        client = BlobServiceClient.from_connection_string(connection_string)
+        container_client = client.get_container_client("silver")
+        
+        # We limit to the last 5 blobs to avoid performance issues with 1M events
+        blobs = sorted(container_client.list_blobs(), key=lambda x: x.name, reverse=True)[:5]
+        
+        for blob in blobs:
+            blob_client = container_client.get_blob_client(blob.name)
+            content = blob_client.download_blob().readall().decode('utf-8')
+            for line in content.splitlines():
+                event = json.loads(line)
+                if event.get("location_city"): depts.add(event["location_city"])
+                if event.get("location_department"): depts.add(event["location_department"])
+    else:
+        # Local logic: Scan data/silver[cite: 2]
+        silver_path = Path("data/silver")
+        for file_path in silver_path.glob("events_*.jsonl"):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
                     event = json.loads(line)
-                    if event.get("location_city"):
-                        cities.add(event["location_city"]) 
-                    if event.get("location_department"):
-                        depts.add(event["location_department"]) 
-                except json.JSONDecodeError:
-                    continue
-                
+                    if event.get("location_city"): cities.add(event["location_city"])
+                    if event.get("location_department"): depts.add(event["location_department"])
+
     return sorted(list(cities)), sorted(list(depts))
+                
 
 def normalize_str(text:str) -> str:
     location = text.strip().lower()
