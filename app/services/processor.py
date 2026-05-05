@@ -91,7 +91,7 @@ class EventProcessor:
         return parsed_timings
 
     @classmethod
-    def transform(cls, raw_record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def transform(cls, raw_record: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         """
         Validates and transforms raw record into Silver format.
         Args:
@@ -100,36 +100,52 @@ class EventProcessor:
             Optional[Dict[str, Any]]: Validated document for indexing.
         """
         try:
-            # 1. Validation via Pydantic 
+            # 1. Validation via Pydantic
             event = EventSchema(**raw_record)
             event_data = event.model_dump()
             
-            # 2. Dynamically build content based on VECTORIZED_FIELDS from config.py
-            # This ensures that Title, Long Description, and Location details are in the vector
+            # 2. Build vectorizable content
             content_parts = []
-            for field in VECTORIZED_FIELDS:
+            for field in VECTORIZED_FIELDS: # Défini dans app/config.py
                 value = event_data.get(field)
                 if value:
-                    # Prefixing with field name helps the LLM and the embedding context
                     content_parts.append(f"{field.upper()}: {value}")
 
             full_vectorizable_text = "\n".join(content_parts)
             
-            # 3. Create Chunks
+            # 3. Create Chunks (Logique P11)
             text_chunks = cls.split_text(full_vectorizable_text)
             
-            # 4. Common metadata preparation 
-            metadata = event.dict()
-            if isinstance(event.timings, List):
-                metadata['timings'] = json.dumps([t.dict() for t in event.timings])
+            # 4. Preparation of Metadata for Azure
+            metadata = event.model_dump()
+            
+            # --- AJOUTS POUR AZURE AI SEARCH ---
+            occurrence_starts = []
+            last_end_date = None
+            
+            if event.timings:
+                # On extrait toutes les dates de début pour le champ Collection(Edm.DateTimeOffset)
+                occurrence_starts = [t.start for t in event.timings]
+                
+                # On identifie la date de fin la plus tardive pour la réduction de 90%
+                # (Utile pour filtrer les événements totalement terminés)
+                last_end_date = max([t.end for t in event.timings])
+            
+            # On injecte ces deux nouveaux champs dans le dictionnaire metadata
+            metadata['occurrence_dates'] = occurrence_starts
+            metadata['last_date'] = last_end_date
+            
+            # On garde aussi la version JSON pour que le LLM puisse lire les horaires détaillés[cite: 2]
+            if isinstance(event.timings, list):
+                metadata['timings'] = json.dumps([t.model_dump() for t in event.timings])
 
-            # Return a list of chunk objects
+            # 5. Return the list of chunk objects[cite: 2]
             return [{
-                "id": f"{event.uid}_{i}", # Unique ID per chunk
+                "id": f"{event.uid}_{i}", # ID unique pour Azure
                 "content": chunk,
-                "metadata": metadata # Every chunk carries the full event metadata
-            } for i, chunk in enumerate(text_chunks)] # type: ignore
+                "metadata": metadata 
+            } for i, chunk in enumerate(text_chunks)]
 
         except Exception as e:
-            # logger.debug(f"Validation failed for event: {e}")
+            logger.error(f"Transformation failed for record {raw_record.get('uid')}: {e}")
             return None
