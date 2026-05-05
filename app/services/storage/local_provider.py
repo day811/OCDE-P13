@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 class LocalProvider(StorageBase):
     """ Implementation of StorageBase for the local filesystem. """
 
-    def __init__(self, base_path: str = "data/user_data"):
+    def __init__(self, base_path: str = "data"):
         self.base_path = base_path
 
     def upload_json(self, folder: str, filename: str, data: Dict[str, Any]) -> bool:
