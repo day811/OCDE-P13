@@ -66,9 +66,15 @@ class IngestionService:
         start_date = datetime.now() - timedelta(days=13 * 30)
         return {
             "last_updated_at": start_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "total_processed": 0
+            "total_processed_session": 0,
+            "last_run": None,
+            "stats": {
+                "total_raw": 0,
+                "silver_valid": 0,
+                "skipped": 0
+            }
         }
-
+    
     def fetch_batch_with_retry(self, after_ts: str, offset: int, max_retries: int = 5) -> List[Dict[str, Any]]:
         """
         Fetches a page of records with an exponential backoff strategy 
@@ -114,59 +120,71 @@ class IngestionService:
     async def run(self, max_records: Optional[int] = None):
         """ Executes the incremental ingestion pipeline. """
         manifest = self._get_manifest()
-        current_ts = manifest["last_updated_at"]
-        total_session = 0
+        current_ts:str = manifest["last_updated_at"]
+        session_processed = 0
         
-        logger.info(f"Starting ingestion in {self.env} mode from {current_ts}")
+        logger.info(f"Starting ingestion from {current_ts}")
 
         keep_running = True
         while keep_running:
-            # We process by offset windows to handle ODS pagination
             for offset in range(0, self.batch_limit, self.page_size):
-                raw_events = self.fetch_batch(current_ts, offset)
+                # Use the retry logic for stability
+                raw_events = self.fetch_batch_with_retry(current_ts, offset)
                 
                 if not raw_events:
                     keep_running = False
                     break
 
-                # 1. Archive to Bronze (Cloud or Local)
+                # 1. Archive to Bronze
                 batch_name = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{offset}.json"
                 self.storage.upload_json("bronze", batch_name, {"results": raw_events})
 
                 # 2. Process and Index
                 indexed_batch = []
+                silver_to_save = []
+                
                 for raw_event in raw_events:
-                    self.stats["total_raw"] += 1
+                    manifest["stats"]["total_raw"] += 1
                     chunks = self.processor.transform(raw_event)
                     
                     if chunks:
-                        # Check if the event is relevant for the Search Index (Upcoming)
+                        silver_to_save.append(chunks[0]['metadata'])
+                        manifest["stats"]["silver_valid"] += 1
+                        
                         if self._is_upcoming(chunks[0]['metadata']):
                             indexed_batch.extend(chunks)
-                            self.stats["indexed"] += 1
-                        else:
-                            self.stats["skipped"] += 1
+                    else:
+                        manifest["stats"]["skipped"] += 1
+
+                # 3. Save to Silver (JSONL format)
+                if silver_to_save:
+                    silver_name = f"events_{datetime.now().strftime('%Y%m%d')}.jsonl"
+                    # Correctly joining JSON lines
+                    silver_content = "\n".join([json.dumps(e, ensure_ascii=False) for e in silver_to_save])
+                    self.storage.upload_json("silver", silver_name, silver_content) # type: ignore
 
                 if indexed_batch:
-                    # Push to FAISS (Local) or Azure Search (Cloud)
                     self.vector_store.add_events(indexed_batch)
 
-                total_session += len(raw_events)
+                session_processed += len(raw_events)
                 
-                # 3. Update progress
+                # 4. Update manifest without losing original keys
                 last_ts = raw_events[-1].get('updatedat')
                 if last_ts:
-                    manifest.update({"last_updated_at": last_ts, "total_processed": manifest["total_processed"] + len(raw_events)})
+                    manifest["last_updated_at"] = last_ts
+                    manifest["total_processed_session"] = session_processed
+                    manifest["last_run"] = datetime.now().isoformat()
+                    
+                    # Persist the whole object to avoid partial data loss
                     self.storage.upload_json(self.container_settings, self.manifest_file, manifest)
 
                 # Exit conditions
-                if len(raw_events) < self.page_size or (max_records and total_session >= max_records):
+                if len(raw_events) < self.page_size or (max_records and session_processed >= max_records):
                     keep_running = False
                     break
             
             if keep_running:
                 current_ts = last_ts # type: ignore
-                # Small delay for local dev to avoid rate limiting
                 if self.env != "AZURE": time.sleep(1)
 
-        logger.info(f"Ingestion finished: {self.stats}")
+        logger.info(f"Ingestion finished: {manifest['stats']}")
