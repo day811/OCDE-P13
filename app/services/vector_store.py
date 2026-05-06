@@ -52,7 +52,7 @@ class VectorStoreService:
                 azure_search_endpoint=os.getenv("AZURE_SEARCH_ENDPOINT", ""),
                 azure_search_key=os.getenv("AZURE_SEARCH_API_KEY", ""),
                 index_name=self.index_name,
-                embedding_function=self.embeddings.embed_query,
+                embedding_function=self.embeddings,
                 fields=fields
             )
         
