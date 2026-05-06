@@ -31,7 +31,7 @@ class IngestionService:
         
         # Containers/Folders names
         self.container_data = "bronze" if self.env == "AZURE" else "bronze"
-        self.container_settings = "settings"
+        self.container_settings = "gold"
         self.manifest_file = "ingestion_manifest.json"
 
         self.today = datetime.now().date()
@@ -47,15 +47,19 @@ class IngestionService:
         if self.env != "AZURE":
             return True
 
-        end_date_str = event_metadata.get("lastdate_with_occurrence")
+        end_date_str = event_metadata.get("last_date")
         if not end_date_str:
             return True
         try:
-            end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00')).date()
+            # Handle both string and datetime objects
+            if isinstance(end_date_str, datetime):
+                end_date = end_date_str.date()
+            else:
+                end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00')).date()
             return end_date >= self.today
         except (ValueError, TypeError):
             return True
-
+        
     def _get_manifest(self) -> Dict[str, Any]:
         """ Retrieves the high watermark from the configured storage. """
         data = self.storage.download_json(self.container_settings, self.manifest_file)
@@ -83,7 +87,7 @@ class IngestionService:
         geo_filter = 'location_countrycode = "FR"' if self.env == "AZURE" else 'location_region = "Occitanie"'
         
         params = {
-            "where": f'updatedat >= "{after_ts}" AND {geo_filter}', # [cite: 180]
+            "where": f'updatedat >= "{after_ts}" AND {geo_filter}', # 
             "order_by": "updatedat ASC",
             "limit": self.page_size,
             "offset": offset
@@ -91,6 +95,7 @@ class IngestionService:
 
         retries = 0
         wait_time = 2  # Initial wait in seconds
+        time.sleep(0.5)
 
         while retries < max_retries:
             try:
@@ -106,7 +111,7 @@ class IngestionService:
                     wait_time *= 2  # Exponentially increase wait
                     continue
                 
-                response.raise_for_status() # Handle other HTTP errors [cite: 181]
+                response.raise_for_status() # Handle other HTTP errors 
 
             except requests.exceptions.RequestException as e:
                 logger.error(f"Network error: {e}. Retrying in {wait_time}s...")
@@ -185,6 +190,5 @@ class IngestionService:
             
             if keep_running:
                 current_ts = last_ts # type: ignore
-                if self.env != "AZURE": time.sleep(1)
 
         logger.info(f"Ingestion finished: {manifest['stats']}")
