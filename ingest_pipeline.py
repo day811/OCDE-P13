@@ -16,7 +16,8 @@ async def main():
     
     # Example: Run a batch of 500 events
     # To run the full national ingestion, remove the limit
-    await ingestor.run(max_records=500)
+    max_records = int(os.getenv('MAX_RECORDS', 100))
+    await ingestor.run(max_records=max_records)
 
 if __name__ == "__main__":
     asyncio.run(main())
