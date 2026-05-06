@@ -3,6 +3,9 @@ import logging
 from typing import List, Dict, Any, Optional, Union
 from langchain_community.vectorstores import FAISS, AzureSearch
 from app.core.embedding_factory import EmbeddingFactory
+from azure.search.documents.indexes.models import (
+    SearchField, SearchFieldDataType, SimpleField, SearchableField
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +31,29 @@ class VectorStoreService:
             Union[FAISS, AzureSearch, None]: The initialized store.
         """
         if self.env == "AZURE":
+            fields = [
+                SimpleField(name="id", type=SearchFieldDataType.String, key=True),
+                SearchableField(name="content", type=SearchFieldDataType.String),
+                SearchField(
+                    name="content_vector", 
+                    type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+                    searchable=True, 
+                    vector_search_dimensions=1536, 
+                    vector_search_profile_name="myHnswProfile"
+                ),
+                # Ces champs DOIVENT être à plat pour le filtrage [cite: 161]
+                SimpleField(name="location_city", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="location_department", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="last_date", type=SearchFieldDataType.DateTimeOffset, filterable=True),
+                SearchField(name="occurrence_dates", type=SearchFieldDataType.Collection(SearchFieldDataType.DateTimeOffset), filterable=True),
+                SimpleField(name="metadata", type=SearchFieldDataType.String)
+            ]
             return AzureSearch(
                 azure_search_endpoint=os.getenv("AZURE_SEARCH_ENDPOINT", ""),
                 azure_search_key=os.getenv("AZURE_SEARCH_API_KEY", ""),
                 index_name=self.index_name,
-                embedding_function=self.embeddings.embed_query
+                embedding_function=self.embeddings.embed_query,
+                fields=fields
             )
         
         vector_db_path: str = "data/faiss_index"

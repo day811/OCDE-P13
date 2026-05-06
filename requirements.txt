@@ -9,3 +9,5 @@ beautifulsoup4
 faiss-cpu
 langchain-community
 azure-storage-blob
+azure-search-documents 
+azure-identity
