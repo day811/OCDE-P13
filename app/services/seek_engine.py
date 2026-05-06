@@ -68,7 +68,7 @@ class SeekEngine:
         dept: str = meta.get("location_department", "")
 
         # 1. Geographic Validation
-        if geo_constraints["city"] and normalize_str(geo_constraints["city"]) != normalize_str(city):
+        if (geo_constraints["city"] and normalize_str(geo_constraints["city"]) != normalize_str(city)) or city != "" :
             return False, []
         if geo_constraints["dept"] and normalize_str(geo_constraints["dept"]) != normalize_str(dept):
             return False, []
