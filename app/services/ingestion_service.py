@@ -165,8 +165,7 @@ class IngestionService:
                 if silver_to_save:
                     silver_name = f"events_{datetime.now().strftime('%Y%m%d')}.jsonl"
                     # Correctly joining JSON lines
-                    silver_content = "\n".join([json.dumps(e, ensure_ascii=False) for e in silver_to_save])
-                    self.storage.upload_json("silver", silver_name, silver_content) # type: ignore
+                    self.storage.upload_json("silver", silver_name, silver_to_save) # type: ignore
 
                 if indexed_batch:
                     self.vector_store.add_events(indexed_batch)
