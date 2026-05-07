@@ -67,40 +67,65 @@ def get_unique_locations() -> Tuple[List[str], List[str]]:
     cities: Set[str] = set()
     depts: Set[str] = set()
 
+    # Initialisation du client Blob si nécessaire
+    container_client = None
     if env == "AZURE":
-        # Cloud logic: Scan the 'silver' container
         connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-        if not connection_string:
-            return [], []
-        
+        if not connection_string: return [], []
         client = BlobServiceClient.from_connection_string(connection_string)
         container_client = client.get_container_client("silver")
-        
-        # We limit to the last 5 blobs to avoid performance issues with 1M events
-        blobs = sorted(container_client.list_blobs(), key=lambda x: x.name, reverse=True)[:5]
-        
-        for blob in blobs:
-            blob_client = container_client.get_blob_client(blob.name)
-            content = blob_client.download_blob().readall().decode('utf-8')
-            for line in content.splitlines():
-                event = json.loads(line)
-                if event.get("location_city"): depts.add(event["location_city"])
-                if event.get("location_department"): depts.add(event["location_department"])
+        blobs = sorted(container_client.list_blobs(), key=lambda x: x.name, reverse=True)[:10] # Un peu plus pour la diversité
     else:
-        # Local logic: Scan data/silver[cite: 2]
         silver_path = Path("data/silver")
-        for file_path in silver_path.glob("events_*.jsonl"):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    event = json.loads(line)
-                    if event.get("location_city"): cities.add(event["location_city"])
-                    if event.get("location_department"): depts.add(event["location_department"])
+        blobs = sorted(silver_path.glob("events_*.json*"), reverse=True)[:10]
+
+    for b in blobs:
+        try:
+            if env == "AZURE":
+                blob_client = container_client.get_blob_client(b.name) # type: ignore
+                content = blob_client.download_blob().readall().decode('utf-8')
+            else:
+                with open(b, 'r', encoding='utf-8') as f: # type: ignore
+                    content = f.read()
+
+            # --- LOGIQUE DE DÉCODAGE ROBUSTE ---
+            # 1. On tente de charger le contenu global
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError:
+                # Si le fichier est un vrai JSONL brut, json.loads(content) échouera
+                data = content.splitlines()
+
+            # 2. On normalise en liste pour itérer
+            if isinstance(data, str): 
+                # Cas du double encodage global : la "string" contient du JSONL
+                data = data.splitlines()
+            elif not isinstance(data, list):
+                data = [data]
+
+            for item in data:
+                # 3. Décodage de second niveau si item est une string (double encodage par ligne)
+                event = item
+                if isinstance(item, str):
+                    try:
+                        event = json.loads(item)
+                    except:
+                        continue # Pas du JSON, on ignore
+                
+                if isinstance(event, dict):
+                    city = event.get("location_city")
+                    dept = event.get("location_department")
+                    if city: cities.add(city) # Correction du bug d'inversion city/dept 
+                    if dept: depts.add(dept)
+        except Exception as e:
+            print(f"Warning: Failed to process blob {b}: {e}")
+            continue
 
     return sorted(list(cities)), sorted(list(depts))
                 
 
 def normalize_str(text:str) -> str:
-    location = text.strip().lower()
+    new_str = text.strip().lower()
     """ Remove accents from text """
     accents = { 'a': ['à', 'ã', 'á', 'â'],
                 'e': ['é', 'è', 'ê', 'ë'],
@@ -111,5 +136,5 @@ def normalize_str(text:str) -> str:
                 }
     for (char, accented_chars) in accents.items():
         for accented_char in accented_chars:
-            location = location.replace(accented_char, char)
-    return location  
+            new_str = new_str.replace(accented_char, char)
+    return new_str  
