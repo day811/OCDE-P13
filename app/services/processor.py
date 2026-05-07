@@ -2,7 +2,7 @@ import json, re
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 
-from app.config import VECTORIZED_FIELDS
+from app.config import VECTORIZED_FIELDS, normalize_str
 from app.schemas.event import EventSchema
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,9 @@ class EventProcessor:
             # On injecte ces deux nouveaux champs dans le dictionnaire metadata
             metadata['occurrence_dates'] = occurrence_starts
             metadata['last_date'] = last_end_date
-            
+            metadata['location_city'] = normalize_str(metadata['location_city'])
+            metadata['location_department'] = normalize_str(metadata['location_department'])
+
             # On garde aussi la version JSON pour que le LLM puisse lire les horaires détaillés[cite: 2]
             if isinstance(event.timings, list):
                 metadata['timings'] = json.dumps([t.model_dump() for t in event.timings])
