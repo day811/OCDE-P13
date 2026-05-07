@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from calendar import monthrange
 from typing import Optional, Dict, Tuple, List
+from app.config import normalize_str
 
 
 logger = logging.getLogger(__name__)
@@ -22,32 +23,6 @@ class QueryParser:
         self.departments = departments
     
         
-    @staticmethod
-    def normalize_str(text: str) -> str:
-        """
-        Normalizes a string by converting to lowercase, stripping whitespace,
-        and removing common French accents.
-        
-        """
-        if not text:
-            return ""
-        
-        normalized = text.strip().lower()
-        # Mapping for French accent removal 
-        accents = {
-            'a': ['à', 'ã', 'á', 'â'],
-            'e': ['é', 'è', 'ê', 'ë'],
-            'i': ['î', 'ï'],
-            'u': ['ù', 'ü', 'û'],
-            'o': ['ô', 'ö'],
-            ' ': ['-', '/']
-        }
-        for char, accented_chars in accents.items():
-            for accented_char in accented_chars:
-                normalized = normalized.replace(accented_char, char)
-        return normalized
-
-
     def parse_date(self,query: str) -> Tuple[datetime, int]:
         """
         Extracts start date and duration (tolerance) from the query.
@@ -56,7 +31,7 @@ class QueryParser:
         """
         months = ['janvier', 'fevrier', 'mars', 'avril', 'mai', 'juin', 
                   'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre']
-        normalized_query = self.normalize_str(query) # Fix: Handle accents like "fevrier" 
+        normalized_query = normalize_str(query) # Fix: Handle accents like "fevrier" 
         
         today = datetime.now()
         
@@ -133,20 +108,22 @@ class QueryParser:
         """
         Matches query against the pre-loaded city and department lists. 
         """
-        q = self.normalize_str(query)
+        q = normalize_str(query)
         found_city = None
         found_dept = None
 
         # Check Cities
         for city in self.cities:
-            if re.search(rf'\b{self.normalize_str(city)}\b', q):
-                found_city = city
+            norm_city = normalize_str(city)
+            if re.search(rf'\b{norm_city}\b', q):
+                found_city = norm_city
                 break
 
         # Check Departments
         for dept in self.departments:
-            if re.search(rf'\b{self.normalize_str(dept)}\b', q):
-                found_dept = dept
+            norm_dept = normalize_str(dept)
+            if re.search(rf'\b{norm_dept}\b', q):
+                found_dept = norm_dept
                 break
 
         return {"city": found_city, "dept": found_dept}
