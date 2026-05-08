@@ -16,7 +16,7 @@ class SettingsStorageService:
 
     def __init__(self):
         self.storage = StorageFactory.get_storage()
-        self.container_name = "settings"
+        self.container_name = "gold"
 
     def _get_settings_filename(self, user_id: str) -> str:
         """ Returns the filename for user settings. """
