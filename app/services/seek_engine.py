@@ -68,7 +68,7 @@ class SeekEngine:
         dept: str = meta.get("location_department", "")
 
         # 1. Geographic Validation
-        if (geo_constraints["city"] and normalize_str(geo_constraints["city"]) != normalize_str(city)) or city != "" :
+        if (geo_constraints["city"] and city != "" and normalize_str(geo_constraints["city"]) != normalize_str(city))  :
             return False, []
         if geo_constraints["dept"] and normalize_str(geo_constraints["dept"]) != normalize_str(dept):
             return False, []
@@ -170,11 +170,19 @@ class SeekEngine:
         effective_city = geo_constraints["city"] if has_explicit_geo else fav_city
         effective_dept = geo_constraints["dept"] if has_explicit_geo else fav_dept
         
+        filter_city = normalize_str(effective_city) if effective_city else None
+        filter_dept = normalize_str(effective_dept) if effective_dept else None 
+
         # Build augmented search query for vector retrieval
         search_query = standalone_query
-        if not has_explicit_geo:
-            if effective_city: search_query += f" à {effective_city}"
-            elif effective_dept: search_query += f" en {effective_dept}"
+        azure_filter = None
+        if has_explicit_geo:
+            if filter_city: 
+                search_query += f" à {effective_city}"
+                azure_filter = f"location_city eq '{filter_city}'"
+            elif filter_dept: 
+                search_query += f" en {effective_dept}"
+                azure_filter = f"location_department eq '{filter_dept}'"
         
         logger.info(f"Date: {str(target_date)} + {str(tolerance)}j - City: {effective_city} - Dept: {effective_dept}")
         # 3. Vector Search
@@ -184,7 +192,11 @@ class SeekEngine:
         
         multiplier = 10 if os.getenv('ENV', 'LOCAL') != 'LOCAL' else 40
             
-        raw_candidates = store.similarity_search(search_query, k=top_k * multiplier)
+        raw_candidates = store.similarity_search(
+            search_query, 
+            k=top_k * multiplier,
+            filters=azure_filter,
+            )
         
         # Filter loop using validated dates and location
         validated_entries = []
