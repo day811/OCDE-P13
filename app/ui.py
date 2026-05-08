@@ -3,14 +3,10 @@ import os
 from app.services.seek_engine import SeekEngine
 from app.services.storage.settings_storage import SettingsStorageService
 from app.services.storage.user_storage import UserStorageService
+from app.services.storage.conversation_storage import ConversationStorageService
 from chainlit.input_widget import Select, Slider
 from app.config import get_unique_locations
 
-# Mock user database for local dev
-USERS = {
-    "admin": "p@ssword123",
-    "yves": "occitanie2026"
-}
 
 @cl.password_auth_callback
 async def auth_callback(username: str, password: str):
@@ -31,8 +27,22 @@ async def start():
     user = cl.user_session.get("user")
     settings_service = SettingsStorageService()
     
+    # --- MÉMOIRE PERSISTANTE : INITIALISATION ---
+    conv_service = ConversationStorageService()
+    session_id = cl.user_session.get("id") # ID unique de la session Chainlit
+    
+    # Chargement de l'historique depuis Cosmos DB
+    history = conv_service.get_history_by_user(user.identifier)
+    # --------------------------------------------
+    if history:
+        for msg in history:
+            await cl.Message(
+                content=msg["content"],
+                author="Utilisateur" if msg["role"] == "user" else "Assistant"
+            ).send()
+
     # Load settings to customize the experience from the start
-    user_settings = settings_service.get_settings(user.identifier)# type: ignore
+    user_settings = settings_service.get_settings(user.identifier) # type: ignore
     all_cities, all_depts = get_unique_locations()     
 
     city_options = ["Aucun"] + all_cities
@@ -60,14 +70,16 @@ async def start():
         )
     ]).send()
 
+    # Stockage en session
     cl.user_session.set("settings", user_settings)
-    cl.user_session.set("chat_history", [])
+    cl.user_session.set("chat_history", history) # On utilise l'historique chargé
     cl.user_session.set("engine", SeekEngine())
     cl.user_session.set("settings_service", settings_service)
+    cl.user_session.set("conv_service", conv_service) # Stockage du service de mémoire
 
     await cl.Message(
         content=f"Bonjour {user.identifier} ! Ravi de te revoir. " # type: ignore
-                f"Tes réglages sont chargés."
+                f"Mémoire conversationnelle et réglages chargés."
     ).send()
 
 @cl.on_settings_update
@@ -89,13 +101,19 @@ async def setup_agent(settings):
 
 @cl.on_message
 async def main(message: cl.Message):
+    # Récupération des services et données en session
     engine = cl.user_session.get("engine")
-    history:list = cl.user_session.get("chat_history") # type: ignore
+    history: list = cl.user_session.get("chat_history") # type: ignore
     user = cl.user_session.get("user")
-    user_settings:dict = cl.user_session.get("settings") # type: ignore
+    user_settings: dict = cl.user_session.get("settings") # type: ignore
     storage = cl.user_session.get("settings_service")
+    conv_service = cl.user_session.get("conv_service")
+    session_id = cl.user_session.get("id")
     
-    # 1. Search with history
+    # 1. Sauvegarde du message Utilisateur dans Cosmos DB
+    conv_service.save_message(session_id, user.identifier, "user", message.content)
+
+    # 2. Recherche avec historique (Contextual Retrieval)
     res = engine.search( # type: ignore
         user_query=message.content,
         user_id=user.identifier, # type: ignore
@@ -103,19 +121,23 @@ async def main(message: cl.Message):
         fav_city=user_settings.get("favorite_city"),
         fav_dept=user_settings.get("favorite_dept")
     )    
-    # 2. Update local history (Sliding window of last 10 messages)
+
+    # 3. Sauvegarde de la réponse Assistant dans Cosmos DB
+    conv_service.save_message(session_id, user.identifier, "assistant", res["answer"])
+
+    # 4. Mise à jour de l'historique local (fenêtre glissante des 10 derniers messages)
     history.append({"role": "user", "content": message.content})
     history.append({"role": "assistant", "content": res["answer"]})
     cl.user_session.set("chat_history", history[-10:])
     
-    # 2. Accounting : Mise à jour persistante
-    usage = res.get("usage", {"prompt": 0,"completion": 0,"total": 0})
+    # 5. Gestion de la consommation (Persistance des tokens)
+    usage = res.get("usage", {"prompt": 0, "completion": 0, "total": 0})
     cumulative = storage.update_usage( # type: ignore
         user.identifier,  # type: ignore
         usage.get("prompt", 0), 
         usage.get("completion", 0)
     )
 
-    # 3. Affichage (Optionnel : petit texte discret en bas de réponse)
+    # 6. Affichage final à l'utilisateur
     footer = f"\n\n*(Consommation : {usage['total']} tokens | Cumul : {cumulative['total_tokens']})*"
     await cl.Message(content=res["answer"] + footer).send()
