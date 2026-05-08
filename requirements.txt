@@ -1,4 +1,5 @@
 fastapi
+bcrypt
 pandas
 uvicorn
 chainlit
@@ -11,3 +12,4 @@ langchain-community
 azure-storage-blob
 azure-search-documents 
 azure-identity
+azure-cosmos 

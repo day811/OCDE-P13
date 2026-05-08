@@ -2,6 +2,7 @@ import chainlit as cl
 import os
 from app.services.seek_engine import SeekEngine
 from app.services.storage.settings_storage import SettingsStorageService
+from app.services.storage.user_storage import UserStorageService
 from chainlit.input_widget import Select, Slider
 from app.config import get_unique_locations
 
@@ -17,8 +18,12 @@ async def auth_callback(username: str, password: str):
     Validates user credentials. 
     In production, this will query a real DB or Azure AD.
     """
-    if USERS.get(username) == password:
-        return cl.User(identifier=username)
+    user_service = UserStorageService()
+    user_data = user_service.authenticate(username, password)
+    
+    if user_data:
+        # On retourne l'objet User avec les métadonnées de la base
+        return cl.User(identifier=username, metadata=user_data.get("metadata", {}))
     return None
 
 @cl.on_chat_start
@@ -62,7 +67,7 @@ async def start():
 
     await cl.Message(
         content=f"Bonjour {user.identifier} ! Ravi de te revoir. " # type: ignore
-                f"Tes réglages pour {user_settings.get('favorite_city') or 'l\'Occitanie'} sont chargés."
+                f"Tes réglages sont chargés."
     ).send()
 
 @cl.on_settings_update
