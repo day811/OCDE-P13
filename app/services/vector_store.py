@@ -39,11 +39,23 @@ class VectorStoreService:
                     type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
                     searchable=True, 
                     vector_search_dimensions=1536, 
-                    vector_search_profile_name="myHnswProfile"
+                    vector_search_profile_name="pulsevents-vector-profile"
                 ),
-                # Ces champs DOIVENT être à plat pour le filtrage [cite: 161]
-                SimpleField(name="location_city", type=SearchFieldDataType.String, filterable=True),
-                SimpleField(name="location_department", type=SearchFieldDataType.String, filterable=True),
+                # Ces champs DOIVENT être à plat pour le filtrage 
+                SearchableField(
+                    name="location_city", 
+                    type=SearchFieldDataType.String, 
+                    filterable=True, 
+                    searchable=True, 
+                    analyzer_name="fr.lucene" # <--- OUI ici
+                ),
+                SearchableField(
+                    name="location_department", 
+                    type=SearchFieldDataType.String, 
+                    filterable=True, 
+                    searchable=True, 
+                    analyzer_name="fr.lucene" # <--- OUI ici
+                ),
                 SimpleField(name="last_date", type=SearchFieldDataType.DateTimeOffset, filterable=True),
                 SearchField(name="occurrence_dates", type=SearchFieldDataType.Collection(SearchFieldDataType.DateTimeOffset), filterable=True),
                 SimpleField(name="metadata", type=SearchFieldDataType.String)
@@ -53,7 +65,8 @@ class VectorStoreService:
                 azure_search_key=os.getenv("AZURE_SEARCH_API_KEY", ""),
                 index_name=self.index_name,
                 embedding_function=self.embeddings,
-                fields=fields
+                fields=fields,
+                search_type="hybrid" # to remove after reindexing
             )
         
         vector_db_path: str = "data/faiss_index"
