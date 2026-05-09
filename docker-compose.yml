@@ -1,0 +1,36 @@
+services:
+  # 1. L'API FastAPI (Port 8000)
+  api:
+    build: .
+    env_file:
+      - .env  # Injecte les variables du fichier .env dans le conteneur
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s 
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+
+  # 2. L'interface Chainlit (Port 8001)
+  ui:
+    build: .
+    env_file:
+      - .env  # Injecte les variables du fichier .env dans le conteneur
+    command: chainlit run app/ui.py --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # 3. Le pipeline d'ingestion (Script ponctuel)
+  ingestor:
+    build: .
+    
+    env_file:
+      - .env  # Injecte les variables du fichier .env dans le conteneur
+    command: python ingest_pipeline.py
+    # Ce service s'arrête une fois l'ingestion finie

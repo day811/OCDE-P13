@@ -1,0 +1,13 @@
+# project customization
+sources/*
+*.parquet
+data/*
+~lock.*
+chunks.json
+.vscode/*
+.git/*
+veb_portal/*
+tests/*.git/*
+notebooks/*
+.venv/*
+.env*
