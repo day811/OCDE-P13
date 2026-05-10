@@ -1,61 +1,402 @@
+/* ============================================================
+   Puls-Events AI — Custom Chainlit Theme
+   Sport / Dynamic aesthetic — Dark & Light mode compatible
+   Chainlit 1.x selector reference
+   ============================================================ */
 
-#root {
-    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+/* ── Google Fonts import ─────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
+
+/* ── CSS Design Tokens ───────────────────────────────────── */
+:root {
+  /* Brand palette */
+  --pe-cyan:          #00d4ff;
+  --pe-cyan-glow:     rgba(0, 212, 255, 0.25);
+  --pe-blue:          #0056d6;
+  --pe-orange:        #ff6b35;   /* energy accent */
+  --pe-orange-glow:   rgba(255, 107, 53, 0.20);
+
+  /* Typography */
+  --pe-font-display:  'Barlow Condensed', sans-serif;
+  --pe-font-body:     'Inter', sans-serif;
+
+  /* Motion */
+  --pe-ease:          cubic-bezier(0.22, 1, 0.36, 1);
+  --pe-duration:      0.25s;
+
+  /* Dark mode surface colours (overridden in light mode below) */
+  --pe-bg:            #0a0f1e;
+  --pe-surface:       #111827;
+  --pe-surface-2:     #1a2235;
+  --pe-border:        rgba(0, 212, 255, 0.15);
+  --pe-text:          #e8f0fe;
+  --pe-text-muted:    #8899bb;
+  --pe-user-bubble:   #0056d6;
+  --pe-bot-bubble:    #111827;
+  --pe-user-text:     #ffffff;
+  --pe-bot-text:      #e8f0fe;
 }
 
-
-.watermark {
-    display: none !important;
+/* ── Light mode overrides ────────────────────────────────── */
+[data-theme="light"],
+html[class~="light"] {
+  --pe-bg:            #f0f4ff;
+  --pe-surface:       #ffffff;
+  --pe-surface-2:     #e8eeff;
+  --pe-border:        rgba(0, 86, 214, 0.20);
+  --pe-text:          #0d1b3e;
+  --pe-text-muted:    #5567a0;
+  --pe-user-bubble:   #0056d6;
+  --pe-bot-bubble:    #ffffff;
+  --pe-user-text:     #ffffff;
+  --pe-bot-text:      #0d1b3e;
+  --pe-cyan:          #0056d6;
+  --pe-cyan-glow:     rgba(0, 86, 214, 0.15);
 }
 
+/* ── Global reset & base ─────────────────────────────────── */
+* { box-sizing: border-box; }
 
-.step {
-    border-radius: 15px !important;
-    padding: 15px !important;
-    margin-bottom: 10px !important;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05) !important;
-    max-width: 85% !important;
+body, #root {
+  font-family: var(--pe-font-body);
+  background: var(--pe-bg) !important;
+  color: var(--pe-text) !important;
 }
 
-
-[data-author="Utilisateur"] .step {
-    background-color: #0078d4 !important;
-    color: white !important;
-    margin-left: auto !important;
-    border-bottom-right-radius: 2px !important;
+/* Animated diagonal stripe background — subtle sport texture */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    -55deg,
+    transparent,
+    transparent 60px,
+    rgba(0, 212, 255, 0.025) 60px,
+    rgba(0, 212, 255, 0.025) 62px
+  );
+  pointer-events: none;
+  z-index: 0;
 }
 
-
-[data-author="Puls-Events Assistant"] .step {
-    background-color: white !important;
-    color: #333 !important;
-    margin-right: auto !important;
-    border: 1px solid #e1e4e8 !important;
-    border-bottom-left-radius: 2px !important;
+[data-theme="light"] body::before,
+html[class~="light"] body::before {
+  background-image: repeating-linear-gradient(
+    -55deg,
+    transparent,
+    transparent 60px,
+    rgba(0, 86, 214, 0.04) 60px,
+    rgba(0, 86, 214, 0.04) 62px
+  );
 }
 
-
-.chat-input {
-    border-radius: 25px !important;
-    border: 2px solid #0078d4 !important;
-    background-color: white !important;
-    padding-left: 20px !important;
+/* ── Header / Navbar ─────────────────────────────────────── */
+header,
+nav[class*="MuiAppBar"],
+div[class*="step-toolbar"] {
+  background: rgba(10, 15, 30, 0.85) !important;
+  backdrop-filter: blur(16px) saturate(160%) !important;
+  border-bottom: 1px solid var(--pe-border) !important;
+  box-shadow: 0 2px 24px rgba(0, 212, 255, 0.08) !important;
 }
 
-
-header {
-    background-color: rgba(255, 255, 255, 0.8) !important;
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid #ddd !important;
+[data-theme="light"] header,
+html[class~="light"] header {
+  background: rgba(240, 244, 255, 0.85) !important;
+  box-shadow: 0 2px 24px rgba(0, 86, 214, 0.10) !important;
 }
+
+/* App name in header */
+header h1,
+header p,
+header span {
+  font-family: var(--pe-font-display) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+nav[class*="sidebar"],
+div[class*="sidebar"],
+aside {
+  background: var(--pe-surface) !important;
+  border-right: 1px solid var(--pe-border) !important;
+}
+
+/* "New chat" button */
 #new-chat-button {
-    display: none;
+  display: none !important;
 }
 
-.rounded-lg.bg-card{
-    background-color: #0c1c28;
+/* ── Chat messages container ─────────────────────────────── */
+.step,
+div[class*="Message"],
+div[class*="message-container"] {
+  font-family: var(--pe-font-body) !important;
+  font-size: 0.95rem !important;
+  line-height: 1.65 !important;
+  border-radius: 16px !important;
+  padding: 14px 18px !important;
+  margin-bottom: 12px !important;
+  max-width: 82% !important;
+  position: relative;
+  animation: pe-fade-up var(--pe-duration) var(--pe-ease) both;
 }
 
-.rounded-fm.bg-accent{
-    background: none;
+@keyframes pe-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── User bubble ─────────────────────────────────────────── */
+[data-author="Utilisateur"] .step,
+div[class*="userMessage"],
+div[class*="user-message"] {
+  background: linear-gradient(135deg, var(--pe-blue) 0%, #0039a6 100%) !important;
+  color: var(--pe-user-text) !important;
+  margin-left: auto !important;
+  margin-right: 0 !important;
+  border-bottom-right-radius: 4px !important;
+  box-shadow: 0 4px 20px rgba(0, 86, 214, 0.35) !important;
+}
+
+/* ── Assistant bubble ────────────────────────────────────── */
+[data-author="Puls-Events Assistant"] .step,
+div[class*="assistantMessage"],
+div[class*="assistant-message"] {
+  background: var(--pe-bot-bubble) !important;
+  color: var(--pe-bot-text) !important;
+  margin-right: auto !important;
+  margin-left: 0 !important;
+  border: 1px solid var(--pe-border) !important;
+  border-bottom-left-radius: 4px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Cyan left accent bar on assistant bubble */
+[data-author="Puls-Events Assistant"] .step::before,
+div[class*="assistantMessage"]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--pe-cyan) 0%, var(--pe-orange) 100%);
+}
+
+/* ── Avatar / Role icon ──────────────────────────────────── */
+/* Chainlit renders a small avatar circle next to each message author label */
+div[class*="avatar"],
+img[class*="avatar"],
+span[class*="avatar"] {
+  border-radius: 50% !important;
+  border: 2px solid var(--pe-cyan) !important;
+  box-shadow: 0 0 10px var(--pe-cyan-glow) !important;
+  object-fit: cover !important;
+  transition: box-shadow var(--pe-duration) var(--pe-ease);
+}
+
+div[class*="avatar"]:hover,
+img[class*="avatar"]:hover {
+  box-shadow: 0 0 20px var(--pe-cyan-glow), 0 0 6px var(--pe-cyan) !important;
+}
+
+/* ── Author label (role name above bubble) ───────────────── */
+div[class*="author"],
+span[class*="author"],
+p[class*="author"] {
+  font-family: var(--pe-font-display) !important;
+  font-weight: 600 !important;
+  font-size: 0.78rem !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  color: var(--pe-cyan) !important;
+  margin-bottom: 4px !important;
+}
+
+/* ── Chat input area ─────────────────────────────────────── */
+div[class*="input-container"],
+div[class*="MuiInputBase"],
+div[class*="chat-input-container"] {
+  background: var(--pe-surface-2) !important;
+  border: 1.5px solid var(--pe-border) !important;
+  border-radius: 28px !important;
+  transition: border-color var(--pe-duration) var(--pe-ease),
+              box-shadow var(--pe-duration) var(--pe-ease) !important;
+}
+
+div[class*="input-container"]:focus-within,
+div[class*="MuiInputBase"]:focus-within {
+  border-color: var(--pe-cyan) !important;
+  box-shadow: 0 0 0 3px var(--pe-cyan-glow) !important;
+}
+
+textarea,
+input[type="text"],
+div[contenteditable="true"] {
+  font-family: var(--pe-font-body) !important;
+  color: var(--pe-text) !important;
+  background: transparent !important;
+}
+
+/* Send button */
+button[type="submit"],
+button[aria-label*="send"],
+button[aria-label*="Send"] {
+  background: linear-gradient(135deg, var(--pe-cyan) 0%, var(--pe-blue) 100%) !important;
+  border-radius: 50% !important;
+  border: none !important;
+  color: #fff !important;
+  transition: transform var(--pe-duration) var(--pe-ease),
+              box-shadow var(--pe-duration) var(--pe-ease) !important;
+}
+
+button[type="submit"]:hover,
+button[aria-label*="send"]:hover {
+  transform: scale(1.08) !important;
+  box-shadow: 0 0 18px var(--pe-cyan-glow) !important;
+}
+
+/* ── Settings panel ──────────────────────────────────────── */
+div[class*="settings"],
+div[class*="Settings"] {
+  background: var(--pe-surface) !important;
+  border: 1px solid var(--pe-border) !important;
+  border-radius: 16px !important;
+}
+
+/* Select & Slider widgets */
+div[class*="MuiSelect"],
+div[class*="MuiSlider"] {
+  color: var(--pe-cyan) !important;
+}
+
+/* ── Watermark removal ───────────────────────────────────── */
+.watermark,
+div[class*="watermark"],
+a[href*="chainlit.io"] {
+  display: none !important;
+}
+
+/* ── Cards / Paper surfaces ──────────────────────────────── */
+div[class*="MuiPaper"],
+.rounded-lg.bg-card {
+  background: var(--pe-surface) !important;
+  border: 1px solid var(--pe-border) !important;
+  border-radius: 14px !important;
+}
+
+/* ── Scrollbar styling ───────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--pe-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--pe-cyan); }
+
+/* ── Token usage footer (rendered as markdown in the message) */
+em {
+  font-size: 0.78rem !important;
+  color: var(--pe-text-muted) !important;
+  font-style: normal !important;
+}
+
+/* ── Streaming cursor animation ──────────────────────────── */
+@keyframes pe-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+div[class*="streaming"]::after {
+  content: '▋';
+  display: inline-block;
+  color: var(--pe-cyan);
+  animation: pe-blink 0.9s step-end infinite;
+  margin-left: 2px;
+}
+
+/* ── Responsive — narrow screens ────────────────────────── */
+@media (max-width: 640px) {
+  .step,
+  div[class*="Message"] {
+    max-width: 94% !important;
+    padding: 10px 14px !important;
+  }
+}
+
+/* ── FIX 1 : Chat column full width ──────────────────────
+   Chainlit caps the message thread at ~65ch by default.
+   We remove that constraint so it fills the available space.
+   ─────────────────────────────────────────────────────── */
+
+/* Main chat thread wrapper */
+div[class*="threadContainer"],
+div[class*="thread-container"],
+div[class*="MessagesContainer"],
+div[class*="messages-container"] {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+
+/* Individual message row */
+div[class*="MessageContainer"],
+div[class*="message-container"],
+div[class*="Step"] {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+
+/* Inner content wrapper that Chainlit constrains */
+div[class*="content"],
+div[class*="Content"] {
+  max-width: 100% !important;
+}
+
+/* The prose area inside each bubble */
+.step,
+div[class*="Message"] {
+  max-width: 88% !important;
+}
+
+
+/* ── FIX 2 : Login page logo ─────────────────────────────
+   Ensure logo.png is used (not favicon) — verify TOML has:
+     logo_light = "public/logo.png"
+     logo_dark  = "public/logo.png"
+   ─────────────────────────────────────────────────────── */
+
+/* Login page container */
+div[class*="login"],
+div[class*="Login"],
+form[class*="login"] {
+  background: var(--pe-surface) !important;
+  border: 1px solid var(--pe-border) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 8px 40px rgba(0, 212, 255, 0.10) !important;
+  padding: 2.5rem !important;
+}
+
+/* Logo on the login page */
+div[class*="login"] img,
+div[class*="Login"] img {
+  max-width: 180px !important;
+  max-height: 80px !important;
+  object-fit: contain !important;
+  margin: 0 auto 1.5rem auto !important;
+  display: block !important;
+}
+
+/* Login title */
+div[class*="login"] h1,
+div[class*="Login"] h1 {
+  font-family: var(--pe-font-display) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  color: var(--pe-cyan) !important;
+  text-align: center !important;
 }
