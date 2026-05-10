@@ -101,71 +101,50 @@ class SeekEngine:
             f"URL: {meta.get('canonicalurl')}\n"
         )
 
-    def _generate_answer(self, user_query: str, context: str, 
-                         chat_history: List[Dict[str, str]]) -> Tuple[Any, Dict[str, int]]:
+
+
+    async def _generate_answer_stream(self, user_query: str, context: str, 
+                               chat_history: List[Dict[str, str]]):
         """
-        Selects the appropriate prompt and invokes the LLM for the final answer.
+        Version streaming de la génération de réponse.
         """
         persona = (
             "Tu es Gemini, un assistant IA authentique, adaptatif et expert de la culture.\n"
-            "Ton but est de conseiller l'utilisateur de manière conviviale et insightful, "
-            "comme un ami qui partage ses meilleurs bons plans."
+            "Ton but est de conseiller l'utilisateur de manière conviviale et insightful."
         )
         
         guidelines = (
             "CONSIGNES DE RÉDACTION :\n"
-            "- Utilise des verbes de conseil ('Je te suggère...', 'Tu devrais adorer...').\n"
+            "- Utilise des verbes de conseil.\n"
             "- Mets en avant l'intérêt de chaque événement.\n"
             "- Mentionne impérativement les dates pertinentes.\n"
             "- Termine par un petit mot d'esprit."
         )
 
         if not chat_history:
-            # Initial prompt
-            prompt = (
-                f"{persona}\n\n{guidelines}\n\n"
-                f"CONTEXTE DES ÉVÉNEMENTS :\n{context}\n\n"
-                f"QUESTION : {user_query}"
-            )
+            prompt = f"{persona}\n\n{guidelines}\n\nCONTEXTE :\n{context}\n\nQUESTION : {user_query}"
         else:
-            # Follow-up prompt with history
             history_block = "\n".join([f"{m['role']}: {m['content']}" for m in chat_history[-5:]])
-            prompt = (
-                f"{persona}\n\n"
-                f"HISTORIQUE DE LA CONVERSATION :\n{history_block}\n\n"
-                f"{guidelines}\n\n"
-                f"NOUVEAU CONTEXTE :\n{context}\n\n"
-                f"DERNIÈRE QUESTION : {user_query}"
-            )
+            prompt = f"{persona}\n\nHISTORIQUE :\n{history_block}\n\n{guidelines}\n\nCONTEXTE :\n{context}\n\nQUESTION : {user_query}"
 
-        response = self.llm.invoke(prompt)
-        usage = response.usage_metadata
-        
-        return response, {
-            "input": usage.get("input_tokens", 0), # type: ignore
-            "output": usage.get("output_tokens", 0) # type: ignore
-        }
+        # Utilisation de .astream() pour le streaming asynchrone
+        async for chunk in self.llm.astream(prompt):
+            yield chunk
 
-    def search(self, user_query: str, user_id: str, 
+    async def search(self, user_query: str, user_id: str, 
                chat_history: List[Dict[str, str]] = [],
                fav_city: Optional[str] = None, 
                fav_dept: Optional[str] = None, 
-               top_k: int = 5) -> Dict[str, Any]:
+               top_k: int = 5):
         """
-        Main RAG pipeline entry point.
+        Pipeline RAG asynchrone qui yield des tokens puis les métadonnées.
         """
-        # 1. Condensation Step
-        # This now returns a clean sentence like "Je cherche des rencontres sportives en juin"
+        # 1. Condensation (reste synchrone car rapide)
         standalone_query, condensation_usage = self._condense_query(user_query, chat_history)
-        logger.info(f"Condensed query: {standalone_query}")
-
-        # 2. Parsing Step
-        # The QueryParser now works on the standalone_query which contains all context
+        
+        # 2. Parsing & Geo Logic
         target_date, tolerance = self.parser.parse_date(standalone_query)
         geo_constraints = self.parser.parse_geo(standalone_query)
-
-        # 3. Geo Fallback Logic
-        # Only use favorites if NO geographic info was found in the standalone query
         has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
         effective_city = geo_constraints["city"] if has_explicit_geo else fav_city
         effective_dept = geo_constraints["dept"] if has_explicit_geo else fav_dept
@@ -173,59 +152,52 @@ class SeekEngine:
         filter_city = normalize_str(effective_city) if effective_city else None
         filter_dept = normalize_str(effective_dept) if effective_dept else None 
 
-        # Build augmented search query for vector retrieval
         search_query = standalone_query
         azure_filter = None
         if has_explicit_geo:
-            if filter_city: 
-                search_query += f" à {effective_city}"
-                azure_filter = f"location_city eq '{filter_city}'"
-            elif filter_dept: 
-                search_query += f" en {effective_dept}"
-                azure_filter = f"location_department eq '{filter_dept}'"
+            if filter_city: azure_filter = f"location_city eq '{filter_city}'"
+            elif filter_dept: azure_filter = f"location_department eq '{filter_dept}'"
         
-        logger.info(f"Date: {str(target_date)} + {str(tolerance)}j - City: {effective_city} - Dept: {effective_dept}")
         # 3. Vector Search
         store = self.vector_store._get_store()
-        if not store:
-            return {"answer": "Error: Store unavailable.", "sources": []}
-        
         multiplier = 10 if os.getenv('ENV', 'LOCAL') != 'LOCAL' else 40
-            
-        raw_candidates = store.similarity_search(
-            search_query, 
-            k=top_k * multiplier,
-            filters=azure_filter,
-            )
+        raw_candidates = store.similarity_search(search_query, k=top_k * multiplier, filters=azure_filter)
         
-        # Filter loop using validated dates and location
         validated_entries = []
         geo_filter = {"city": effective_city, "dept": effective_dept}
-        
         for doc in raw_candidates:
             is_valid, matching_dates = self._validate_event(doc.metadata, target_date, tolerance, geo_filter)
             if is_valid:
                 context_block = self._build_context_block(doc.metadata, matching_dates, doc.page_content)
                 validated_entries.append({"block": context_block, "metadata": doc.metadata})
-            if len(validated_entries) >= top_k:
-                break
+            if len(validated_entries) >= top_k: break
 
-        # 5. Final Answer Generation
         if not validated_entries:
-            return {"answer": "Désolé, aucun événement trouvé pour cette période.", "sources": []}
+            yield "Désolé, aucun événement trouvé."
+            return
 
         full_context = "\n---\n".join([e["block"] for e in validated_entries])
-        logger.debug(f"Query: {user_query} ")
-        logger.debug(f"Full context: {full_context} ")
-        logger.debug(f"Chat history: {chat_history} ")
-        answer_obj, generation_usage = self._generate_answer(user_query, full_context, chat_history)
 
-        # 6. Usage Accounting
-        total_input = condensation_usage["input"] + generation_usage["input"]
-        total_output = condensation_usage["output"] + generation_usage["output"]
+        # 4. STREAMING DE LA RÉPONSE
+        full_answer = ""
+        total_input = condensation_usage["input"]
+        total_output = condensation_usage["output"]
 
-        return {
-            "answer": answer_obj.content,
+        async for chunk in self._generate_answer_stream(user_query, full_context, chat_history):
+            content = chunk.content
+            full_answer += content
+            # On yield le texte pour l'UI
+            yield content 
+            
+            # On accumule l'usage si disponible dans le chunk
+            if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
+                total_input += chunk.usage_metadata.get("input_tokens", 0)
+                total_output += chunk.usage_metadata.get("output_tokens", 0)
+
+        # 5. DERNIER YIELD : MÉTADONNÉES
+        # On envoie un dictionnaire final pour que l'UI récupère les sources et l'usage
+        yield {
+            "full_answer": full_answer,
             "sources": [e["metadata"] for e in validated_entries],
             "usage": {
                 "prompt": total_input,
