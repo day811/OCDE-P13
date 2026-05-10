@@ -24,4 +24,6 @@ RUN mkdir -p data/logs
 # Ports pour API et UI
 EXPOSE 8000 8001
 
+RUN chmod +x entrypoint.sh
+CMD ["./entrypoint.sh"]
 # L'entrée sera définie au lancement (command dans docker-compose ou Azure)
