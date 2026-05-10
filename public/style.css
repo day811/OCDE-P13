@@ -1,0 +1,61 @@
+
+#root {
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+}
+
+
+.watermark {
+    display: none !important;
+}
+
+
+.step {
+    border-radius: 15px !important;
+    padding: 15px !important;
+    margin-bottom: 10px !important;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05) !important;
+    max-width: 85% !important;
+}
+
+
+[data-author="Utilisateur"] .step {
+    background-color: #0078d4 !important;
+    color: white !important;
+    margin-left: auto !important;
+    border-bottom-right-radius: 2px !important;
+}
+
+
+[data-author="Puls-Events Assistant"] .step {
+    background-color: white !important;
+    color: #333 !important;
+    margin-right: auto !important;
+    border: 1px solid #e1e4e8 !important;
+    border-bottom-left-radius: 2px !important;
+}
+
+
+.chat-input {
+    border-radius: 25px !important;
+    border: 2px solid #0078d4 !important;
+    background-color: white !important;
+    padding-left: 20px !important;
+}
+
+
+header {
+    background-color: rgba(255, 255, 255, 0.8) !important;
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid #ddd !important;
+}
+#new-chat-button {
+    display: none;
+}
+
+.rounded-lg.bg-card{
+    background-color: #0c1c28;
+}
+
+.rounded-fm.bg-accent{
+    background: none;
+}

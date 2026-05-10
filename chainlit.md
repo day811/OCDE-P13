@@ -1,14 +1,28 @@
-# Welcome to Chainlit! 🚀🤖
+# Bienvenue chez Puls-Events 🚀
 
-Hi there, Developer! 👋 We're excited to have you on board. Chainlit is a powerful tool designed to help you prototype, debug and share applications built on top of LLMs.
+## À propos de Puls-Events
+Puls-Events s'inscrit au cœur de l'innovation culturelle. . 
 
-## Useful Links 🔗
+Grâce à notre technologie de pointe, nous passons d'une simple recherche à une véritable recommandation intelligente, capable de supporter une charge nationale tout en garantissant une pertinence maximale[cite: 121].
 
-- **Documentation:** Get started with our comprehensive [Chainlit Documentation](https://docs.chainlit.io) 📚
-- **Discord Community:** Join our friendly [Chainlit Discord](https://discord.gg/k73SQ3FyUh) to ask questions, share your projects, and connect with other developers! 💬
+## Pourquoi utiliser cet Assistant ?
+Cet outil a été conçu pour répondre aux défis majeurs de la recherche culturelle actuelle :
+* **Pertinence Temporelle** : Contrairement aux moteurs classiques, notre système élimine les résultats obsolètes pour ne vous proposer que des événements à venir dans une fenêtre de 12 mois.
+* **Intelligence Sémantique** : L'assistant comprend le sens de vos phrases, et pas seulement les mots-clés, pour des résultats qui correspondent vraiment à vos envies.
+* **Mémoire Conversationnelle** : L'outil se souvient de vos échanges précédents. Vous pouvez poser des questions de suivi ou demander des précisions sans avoir à tout répéter.
 
-We can't wait to see what you create with Chainlit! Happy coding! 💻😊
+## Guide d'utilisation
 
-## Welcome screen
+### 1. Configurez vos préférences ⚙️
+Pour obtenir les meilleurs résultats, commencez par ajuster vos paramètres dans le panneau dédié (icône réglages) :
+* **Ville et Département par défaut** : Définissez votre zone géographique favorite pour des recommandations "à proximité" immédiates.
+* **Rayon de recherche** : Ajustez la distance (en km) pour élargir ou restreindre vos horizons de sortie.
 
-To modify the welcome screen, edit the `chainlit.md` file at the root of your project. If you do not want a welcome screen, just leave this file empty.
+### 2. Interagissez naturellement 💬
+Posez vos questions comme vous le feriez avec un ami expert en culture. Voici quelques exemples :
+* *"Quels sont les concerts de jazz à Lyon ce samedi ?"* 
+* *"Peux-tu me trouver d'autres événements comme celui que j'ai aimé hier ?"* 
+* *"Vérifie s'il reste des places pour ce festival sur le web"* 
+
+---
+*L'équipe Puls-Events vous souhaite une excellente navigation et de merveilleuses découvertes culturelles !*
