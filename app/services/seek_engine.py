@@ -59,10 +59,21 @@ class SeekEngine:
             "output": usage.get("output_tokens", 0) # type: ignore
         }
 
-    def _validate_event(self, meta: Dict[str, Any], target_date: datetime, 
+    def _validate_event(self, meta: Dict[str, Any], target_date: datetime,
                         tolerance: int, geo_constraints: Dict[str, Optional[str]]) -> Tuple[bool, List[str]]:
         """
         Checks geographic and temporal constraints for a candidate event.
+
+        Args:
+            meta (Dict[str, Any]): Event metadata dict from the vector store document.
+            target_date (datetime): Reference date parsed from the user query.
+            tolerance (int): Number of days after ``target_date`` that are still considered valid.
+            geo_constraints (Dict[str, Optional[str]]): Effective geographic filters with keys
+                ``"city"`` and ``"dept"`` (either may be ``None`` to skip that constraint).
+
+        Returns:
+            Tuple[bool, List[str]]: A boolean indicating validity and a list of matching date
+            strings formatted as ``"DD/MM/YYYY à HH:MM"``.
         """
         city: str = meta.get("location_city", "")
         dept: str = meta.get("location_department", "")
@@ -90,7 +101,15 @@ class SeekEngine:
 
     def _build_context_block(self, meta: Dict[str, Any], matching_dates: List[str], page_content: str) -> str:
         """
-        Builds a rich text block for an event to be sent to the LLM.
+        Builds a rich text block for an event to be injected into the LLM prompt.
+
+        Args:
+            meta (Dict[str, Any]): Event metadata dict from the vector store document.
+            matching_dates (List[str]): Pre-formatted date strings that fall within the requested window.
+            page_content (str): Raw page content from the vector store document (currently unused but kept for extensibility).
+
+        Returns:
+            str: A multi-line text block summarising the event (title, dates, location, description, URL).
         """
         return (
             f"ÉVÉNEMENT: {meta.get('title_fr')}\n"
@@ -103,16 +122,24 @@ class SeekEngine:
 
 
 
-    async def _generate_answer_stream(self, user_query: str, context: str, 
+    async def _generate_answer_stream(self, user_query: str, context: str,
                                chat_history: List[Dict[str, str]]):
         """
-        Version streaming de la génération de réponse.
+        Streams the LLM answer token by token.
+
+        Args:
+            user_query (str): The original user question.
+            context (str): The concatenated event context blocks to pass to the LLM.
+            chat_history (List[Dict[str, str]]): Previous conversation turns (role/content pairs).
+
+        Yields:
+            LLM chunk objects whose `.content` attribute carries the streamed text fragment.
         """
         persona = (
             "Tu es Gemini, un assistant IA authentique, adaptatif et expert de la culture.\n"
             "Ton but est de conseiller l'utilisateur de manière conviviale et insightful."
         )
-        
+
         guidelines = (
             "CONSIGNES DE RÉDACTION :\n"
             "- Utilise des verbes de conseil.\n"
@@ -127,19 +154,31 @@ class SeekEngine:
             history_block = "\n".join([f"{m['role']}: {m['content']}" for m in chat_history[-5:]])
             prompt = f"{persona}\n\nHISTORIQUE :\n{history_block}\n\n{guidelines}\n\nCONTEXTE :\n{context}\n\nQUESTION : {user_query}"
 
-        # Utilisation de .astream() pour le streaming asynchrone
+        # Use .astream() for asynchronous streaming
         async for chunk in self.llm.astream(prompt):
             yield chunk
 
-    async def search(self, user_query: str, user_id: str, 
+    async def search(self, user_query: str, user_id: str,
                chat_history: List[Dict[str, str]] = [],
-               fav_city: Optional[str] = None, 
-               fav_dept: Optional[str] = None, 
+               fav_city: Optional[str] = None,
+               fav_dept: Optional[str] = None,
                top_k: int = 5):
         """
-        Pipeline RAG asynchrone qui yield des tokens puis les métadonnées.
+        Async RAG pipeline that yields response tokens followed by a final metadata dict.
+
+        Args:
+            user_query (str): The latest user question.
+            user_id (str): Identifier of the requesting user.
+            chat_history (List[Dict[str, str]]): Previous conversation turns (role/content pairs).
+            fav_city (Optional[str]): User's preferred city used as fallback when no city is detected in the query.
+            fav_dept (Optional[str]): User's preferred department used as fallback when no department is detected.
+            top_k (int): Maximum number of validated events to include in the context. Defaults to 5.
+
+        Yields:
+            str: Streamed text fragments of the LLM answer.
+            dict: Final metadata dict with keys ``full_answer``, ``sources``, and ``usage``.
         """
-        # 1. Condensation (reste synchrone car rapide)
+        # 1. Condense follow-up into a standalone query (synchronous — fast)
         standalone_query, condensation_usage = self._condense_query(user_query, chat_history)
         
         # 2. Parsing & Geo Logic
@@ -158,7 +197,7 @@ class SeekEngine:
             if filter_city: azure_filter = f"location_city eq '{filter_city}'"
             elif filter_dept: azure_filter = f"location_department eq '{filter_dept}'"
         
-        # 3. Vector Search
+        # 3. Vector search
         store = self.vector_store._get_store()
         multiplier = 10 if os.getenv('ENV', 'LOCAL') != 'LOCAL' else 40
         raw_candidates = store.similarity_search(search_query, k=top_k * multiplier, filters=azure_filter)
@@ -178,7 +217,7 @@ class SeekEngine:
 
         full_context = "\n---\n".join([e["block"] for e in validated_entries])
 
-        # 4. STREAMING DE LA RÉPONSE
+        # 4. Stream the answer
         full_answer = ""
         total_input = condensation_usage["input"]
         total_output = condensation_usage["output"]
@@ -186,16 +225,15 @@ class SeekEngine:
         async for chunk in self._generate_answer_stream(user_query, full_context, chat_history):
             content = chunk.content
             full_answer += content
-            # On yield le texte pour l'UI
-            yield content 
-            
-            # On accumule l'usage si disponible dans le chunk
+            # Yield each text fragment to the UI
+            yield content
+
+            # Accumulate token usage when available in the chunk
             if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
                 total_input += chunk.usage_metadata.get("input_tokens", 0)
                 total_output += chunk.usage_metadata.get("output_tokens", 0)
 
-        # 5. DERNIER YIELD : MÉTADONNÉES
-        # On envoie un dictionnaire final pour que l'UI récupère les sources et l'usage
+        # 5. Final yield: metadata dict so the UI can retrieve sources and usage
         yield {
             "full_answer": full_answer,
             "sources": [e["metadata"] for e in validated_entries],
