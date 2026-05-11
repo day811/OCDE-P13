@@ -211,6 +211,30 @@ az containerapp job create \
 
 echo "✅ Ingestor job created"
 
+az postgres flexible-server create \
+    --name pulsevents-db \
+    --resource-group OpenClassrooms_P13 \
+    --location francecentral \
+    --admin-user pgadmin \
+    --admin-password "TON_MOT_DE_PASSE_FORT" \
+    --sku-name Standard_B1ms \
+    --tier Burstable \
+    --storage-size 32 \
+    --version 16 \
+    --yes
+
+az postgres flexible-server db create \
+    --server-name pulsevents-db \
+    --resource-group OpenClassrooms_P13 \
+    --database-name chainlit    
+
+az postgres flexible-server firewall-rule create \
+    --name pulsevents-db \
+    --resource-group OpenClassrooms_P13 \
+    --rule-name allow-azure-services \
+    --start-ip-address 0.0.0.0 \
+    --end-ip-address 0.0.0.0
+
 # ── 8. Print summary ───────────────────────────────────────────
 echo ""
 echo "=============================================="
