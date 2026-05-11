@@ -1,79 +1,78 @@
+# app/ui.py
+"""
+Chainlit UI for Puls-Events AI chatbot.
+
+Conversation persistence (left pane history, new chat button) is handled
+natively by the SQLAlchemy data layer declared below.
+UserSettings and token usage are still managed via SettingsStorageService.
+"""
+
+import os
 import chainlit as cl
 from chainlit.input_widget import Select, Slider
-import os
+
 from app.services.seek_engine import SeekEngine
-from app.services.storage.settings_storage import SettingsStorageService
 from app.services.storage.user_storage import UserStorageService
-from app.services.storage.conversation_storage import ConversationStorageService
+from app.services.storage.settings_storage import SettingsStorageService
+from app.services.storage.chainlit_storage import get_data_layer
 from app.config import get_unique_locations
 
+# ── Data layer registration ────────────────────────────────────────────────────
+# This single decorator activates the left-pane conversation history,
+# the New Chat button, and message persistence — no extra code needed.
+
+cl.data_layer(get_data_layer)
+
+# ── Authentication ─────────────────────────────────────────────────────────────
 
 @cl.password_auth_callback
 async def auth_callback(username: str, password: str):
     """
-    Validates user credentials. 
-    In production, this will query a real DB or Azure AD.
+    Validates user credentials against Cosmos DB.
+    Returns a cl.User object on success, None on failure.
     """
     user_service = UserStorageService()
     user_data = user_service.authenticate(username, password)
-    
     if user_data:
-        # On retourne l'objet User avec les métadonnées de la base
         return cl.User(identifier=username, metadata=user_data.get("metadata", {}))
     return None
 
+
+# ── Chat start ─────────────────────────────────────────────────────────────────
+
 @cl.on_chat_start
 async def start():
-
+    """
+    Initialises a new chat session:
+      1. Displays the assistant avatar.
+      2. Loads and applies user settings.
+      3. Registers session variables.
+      4. Sends the welcome message.
+    """
+    # 1. Avatar
     image_path = "./public/favicon.png"
-    
     if os.path.exists(image_path):
-        # On crée l'élément d'abord
-        avatar = cl.Image(
-            path=image_path, 
-            name="Puls-Events Assistant", 
-            display="side"
-        )
-        # On l'envoie explicitement (await est crucial ici)
+        avatar = cl.Image(path=image_path, name="Puls-Events Assistant", display="side")
         await avatar.send(for_id="")
-    else:
-        print(f"Erreur : Logo introuvable au chemin {image_path}")
-        
-    user = cl.user_session.get("user")
+
+    user             = cl.user_session.get("user")
     settings_service = SettingsStorageService()
-    
-    # --- MÉMOIRE PERSISTANTE : INITIALISATION ---
-    conv_service = ConversationStorageService()
-    session_id = cl.user_session.get("id") # ID unique de la session Chainlit
-    
-    # Chargement de l'historique depuis Cosmos DB
-    history = conv_service.get_history_by_user(user.identifier)
-    # --------------------------------------------
-    if history:
-        for msg in history:
-            await cl.Message(
-                content=msg["content"],
-                author="Utilisateur" if msg["role"] == "user" else "Assistant"
-            ).send()
+    user_settings    = settings_service.get_settings(user.identifier)
 
-    # Load settings to customize the experience from the start
-    user_settings = settings_service.get_settings(user.identifier) # type: ignore
-    all_cities, all_depts = get_unique_locations()     
+    # 2. Settings widgets
+    all_cities, all_depts = get_unique_locations()
 
-    city_options = ["Aucun"] + all_cities
-    dept_options = ["Aucun"] + all_depts
-
-    settings = await cl.ChatSettings([
+    await cl.ChatSettings([
         Select(
             id="favorite_city",
             label="Ville par défaut",
-            values=city_options,
+            values=["Aucun"] + all_cities,
             initial_value=user_settings.get("favorite_city") or "Aucun"
         ),
         Select(
             id="favorite_dept",
             label="Département par défaut",
-            values=dept_options,
+            values=["Aucun"] + all_depts,
             initial_value=user_settings.get("favorite_dept") or "Aucun"
         ),
         Slider(
@@ -85,59 +84,60 @@ async def start():
         )
     ]).send()
 
-    # Stockage en session
-    cl.user_session.set("settings", user_settings)
-    cl.user_session.set("chat_history", history) # On utilise l'historique chargé
-    cl.user_session.set("engine", SeekEngine())
+    # 3. Session variables
+    cl.user_session.set("settings",         user_settings)
+    cl.user_session.set("chat_history",     [])
+    cl.user_session.set("engine",           SeekEngine())
     cl.user_session.set("settings_service", settings_service)
-    cl.user_session.set("conv_service", conv_service) # Stockage du service de mémoire
 
+    # 4. Welcome message
     await cl.Message(
-        content=f"Bonjour {user.identifier} ! Ravi de te revoir. " # type: ignore
-                f"Mémoire conversationnelle et réglages chargés."
+        content=f"Bonjour **{user.identifier}** ! Que puis-je faire pour vous ?"
     ).send()
 
+
+# ── Settings update ────────────────────────────────────────────────────────────
+
 @cl.on_settings_update
-async def setup_agent(settings):
-    user = cl.user_session.get("user")
+async def on_settings_update(settings: dict):
+    """Persists updated user settings to storage."""
+    user    = cl.user_session.get("user")
     storage = cl.user_session.get("settings_service")
-    
-    # Transform de "Aucun" en None avant la sauvegarde
-    processed_settings = settings.copy()
-    if processed_settings.get("favorite_city") == "Aucun":
-        processed_settings["favorite_city"] = None
-    if processed_settings.get("favorite_dept") == "Aucun":
-        processed_settings["favorite_dept"] = None
-        
-    storage.save_settings(user.identifier, processed_settings) # type: ignore
-    cl.user_session.set("settings", processed_settings)
-    
+
+    processed = {
+        "favorite_city": None if settings.get("favorite_city") == "Aucun" else settings.get("favorite_city"),
+        "favorite_dept": None if settings.get("favorite_dept") == "Aucun" else settings.get("favorite_dept"),
+        "radius_km":     settings.get("radius_km", 20),
+    }
+    storage.save_settings(user.identifier, processed)
+    cl.user_session.set("settings", processed)
     await cl.Message(content="✅ Préférences mises à jour.").send()
 
-@cl.on_message
-# app/ui.py
+
+# ── Main message handler ───────────────────────────────────────────────────────
 
 @cl.on_message
 async def main(message: cl.Message):
-    engine = cl.user_session.get("engine")
-    history: list = cl.user_session.get("chat_history") # type: ignore
-    user = cl.user_session.get("user")
-    user_settings: dict = cl.user_session.get("settings") # type: ignore
-    storage = cl.user_session.get("settings_service")
-    conv_service = cl.user_session.get("conv_service")
-    session_id = cl.user_session.get("id")
-    
-    # 1. Sauvegarde immédiate de la question
-    conv_service.save_message(session_id, user.identifier, "user", message.content)
+    """
+    Handles incoming user messages:
+      1. Streams the RAG engine response token by token.
+      2. Appends token usage to the response footer.
+      3. Updates the in-memory history (last 20 messages = 10 turns).
 
-    # 2. Initialisation du message de réponse vide pour le streaming
-    res_msg = cl.Message(content="")
-    
+    Note: Message persistence to the data layer is handled automatically
+    by Chainlit — no explicit save_message() call needed here.
+    """
+    engine        = cl.user_session.get("engine")
+    history: list = cl.user_session.get("chat_history")
+    user          = cl.user_session.get("user")
+    user_settings = cl.user_session.get("settings")
+    storage       = cl.user_session.get("settings_service")
+
+    # Stream response
+    res_msg     = cl.Message(content="")
     full_answer = ""
-    metadata = {}
+    metadata    = {}
 
-    # 3. Consommation du stream
-    # search est maintenant une fonction asynchrone génératrice
     async for chunk in engine.search(
         user_query=message.content,
         user_id=user.identifier,
@@ -146,28 +146,26 @@ async def main(message: cl.Message):
         fav_dept=user_settings.get("favorite_dept")
     ):
         if isinstance(chunk, str):
-            # C'est un morceau de texte (token)
             full_answer += chunk
             await res_msg.stream_token(chunk)
         elif isinstance(chunk, dict):
-            # C'est le dictionnaire de métadonnées final
             metadata = chunk
 
-    # 4. Finalisation de l'affichage (Usage & Footer)
-    usage = metadata.get("usage", {"prompt": 0, "completion": 0, "total": 0})
+    # Token usage footer
+    usage      = metadata.get("usage", {"prompt": 0, "completion": 0, "total": 0})
     cumulative = storage.update_usage(
-        user.identifier, 
-        usage.get("prompt", 0), 
+        user.identifier,
+        usage.get("prompt", 0),
         usage.get("completion", 0)
     )
-    
-    footer = f"\n\n*(Consommation : {usage['total']} tokens | Cumul : {cumulative['total_tokens']})*"
-    res_msg.content = full_answer + footer
+    res_msg.content = (
+        full_answer
+        + f"\n\n*(Consommation : {usage['total']} tokens"
+        + f" | Cumul : {cumulative['total_tokens']})*"
+    )
     await res_msg.send()
 
-    # 5. Sauvegardes finales
-    conv_service.save_message(session_id, user.identifier, "assistant", full_answer)
-    
-    history.append({"role": "user", "content": message.content})
+    # Update in-memory history (kept for RAG context condensation)
+    history.append({"role": "user",      "content": message.content})
     history.append({"role": "assistant", "content": full_answer})
-    cl.user_session.set("chat_history", history[-10:])
+    cl.user_session.set("chat_history", history[-20:])
