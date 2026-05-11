@@ -124,10 +124,6 @@ aside {
   border-right: 1px solid var(--pe-border) !important;
 }
 
-/* "New chat" button */
-#new-chat-button {
-  display: none !important;
-}
 
 /* ── Chat messages container ─────────────────────────────── */
 .step,
