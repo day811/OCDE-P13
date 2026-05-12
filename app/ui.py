@@ -18,48 +18,22 @@ from app.services.storage.chainlit_storage import get_data_layer
 from app.config import get_unique_locations
 
 # ── Data layer registration ────────────────────────────────────────────────────
-# This single decorator activates the left-pane conversation history,
-# the New Chat button, and message persistence — no extra code needed.
-
 cl.data_layer(get_data_layer)
 
-# ── Authentication ─────────────────────────────────────────────────────────────
 
-@cl.password_auth_callback
-async def auth_callback(username: str, password: str):
+# ── Shared session initialisation ──────────────────────────────────────────────
+
+async def _init_session(user: cl.User) -> None:
     """
-    Validates user credentials against Cosmos DB.
-    Returns a cl.User object on success, None on failure.
+    Initialises all session variables required by on_message.
+    Called both from on_chat_start (new conversation) and
+    on_chat_resume (loading an existing conversation from history).
+
+    Args:
+        user (cl.User): The authenticated Chainlit user object.
     """
-    user_service = UserStorageService()
-    user_data = user_service.authenticate(username, password)
-    if user_data:
-        return cl.User(identifier=username, metadata=user_data.get("metadata", {}))
-    return None
-
-
-# ── Chat start ─────────────────────────────────────────────────────────────────
-
-@cl.on_chat_start
-async def start():
-    """
-    Initialises a new chat session:
-      1. Displays the assistant avatar.
-      2. Loads and applies user settings.
-      3. Registers session variables.
-      4. Sends the welcome message.
-    """
-    # 1. Avatar
-    image_path = "./public/favicon.png"
-    if os.path.exists(image_path):
-        avatar = cl.Image(path=image_path, name="Puls-Events Assistant", display="side")
-        await avatar.send(for_id="")
-
-    user             = cl.user_session.get("user")
     settings_service = SettingsStorageService()
     user_settings    = settings_service.get_settings(user.identifier)
-
-    # 2. Settings widgets
     all_cities, all_depts = get_unique_locations()
 
     await cl.ChatSettings([
@@ -84,16 +58,75 @@ async def start():
         )
     ]).send()
 
-    # 3. Session variables
     cl.user_session.set("settings",         user_settings)
     cl.user_session.set("chat_history",     [])
     cl.user_session.set("engine",           SeekEngine())
     cl.user_session.set("settings_service", settings_service)
 
-    # 4. Welcome message
+
+# ── Authentication ─────────────────────────────────────────────────────────────
+
+@cl.password_auth_callback
+async def auth_callback(username: str, password: str):
+    """
+    Validates user credentials against Cosmos DB.
+    Returns a cl.User object on success, None on failure.
+    """
+    user_service = UserStorageService()
+    user_data    = user_service.authenticate(username, password)
+    if user_data:
+        return cl.User(identifier=username, metadata=user_data.get("metadata", {}))
+    return None
+
+
+# ── Chat start (new conversation) ─────────────────────────────────────────────
+
+@cl.on_chat_start
+async def start():
+    """
+    Initialises a brand-new chat session.
+    Displays avatar, initialises session variables, sends welcome message.
+    """
+    # Avatar
+    image_path = "./public/favicon.png"
+    if os.path.exists(image_path):
+        avatar = cl.Image(path=image_path, name="Puls-Events Assistant", display="side")
+        await avatar.send(for_id="")
+
+    user = cl.user_session.get("user")
+    await _init_session(user)
+
     await cl.Message(
         content=f"Bonjour **{user.identifier}** ! Que puis-je faire pour vous ?"
     ).send()
+
+
+# ── Chat resume (loading existing conversation from left pane) ────────────────
+
+@cl.on_chat_resume
+async def resume(thread: dict):
+    """
+    Restores session variables when an existing conversation is loaded
+    from the left-pane history. Without this callback, on_message would
+    find empty session variables and the input area would be disabled.
+
+    Args:
+        thread (dict): The thread metadata provided by Chainlit's data layer.
+    """
+    user = cl.user_session.get("user")
+    await _init_session(user)
+
+    # Rebuild in-memory history from persisted thread messages
+    # so the RAG engine has context for follow-up questions
+    history = []
+    for message in thread.get("steps", []):
+        role    = "user" if message.get("type") == "user_message" else "assistant"
+        content = message.get("output", "")
+        if content:
+            history.append({"role": role, "content": content})
+
+    # Keep only the last 10 turns (20 messages)
+    cl.user_session.set("chat_history", history[-20:])
 
 
 # ── Settings update ────────────────────────────────────────────────────────────
@@ -120,9 +153,11 @@ async def on_settings_update(settings: dict):
 async def main(message: cl.Message):
     """
     Handles incoming user messages:
-      1. Streams the RAG engine response token by token.
-      2. Appends token usage to the response footer.
-      3. Updates the in-memory history (last 20 messages = 10 turns).
+      1. Checks guest daily quota.
+      2. Streams the RAG engine response token by token.
+      3. Persists token usage to PostgreSQL.
+      4. Appends token usage to the response footer.
+      5. Updates the in-memory history (last 10 turns = 20 messages).
 
     Note: Message persistence to the data layer is handled automatically
     by Chainlit — no explicit save_message() call needed here.
@@ -133,7 +168,13 @@ async def main(message: cl.Message):
     user_settings = cl.user_session.get("settings")
     storage       = cl.user_session.get("settings_service")
 
-    # Stream response
+    # 1. Guest quota check
+    quota = storage.check_daily_quota(user.identifier, user.metadata)
+    if not quota["allowed"]:
+        await cl.Message(content=quota["reason"]).send()
+        return
+
+    # 2. Stream response
     res_msg     = cl.Message(content="")
     full_answer = ""
     metadata    = {}
@@ -151,13 +192,20 @@ async def main(message: cl.Message):
         elif isinstance(chunk, dict):
             metadata = chunk
 
-    # Token usage footer
+    # 3. Persist token usage to PostgreSQL (async)
     usage      = metadata.get("usage", {"prompt": 0, "completion": 0, "total": 0})
-    cumulative = storage.update_usage(
+    cumulative = await storage.update_usage(
         user.identifier,
+        cl.context.session.thread_id,
         usage.get("prompt", 0),
         usage.get("completion", 0)
     )
+
+    # 4. Increment guest daily counter
+    if user.metadata.get("role") == "guest":
+        storage.increment_daily_usage(user.identifier, usage.get("total", 0))
+
+    # 5. Token usage footer
     res_msg.content = (
         full_answer
         + f"\n\n*(Consommation : {usage['total']} tokens"
@@ -165,7 +213,7 @@ async def main(message: cl.Message):
     )
     await res_msg.send()
 
-    # Update in-memory history (kept for RAG context condensation)
+    # 6. Update in-memory history
     history.append({"role": "user",      "content": message.content})
     history.append({"role": "assistant", "content": full_answer})
     cl.user_session.set("chat_history", history[-20:])

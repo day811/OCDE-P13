@@ -27,6 +27,10 @@ def main():
         # Préparation des métadonnées minimales (le rôle)
         # Les réglages UI (ville, rayon) seront gérés par SettingsStorageService
         user_metadata = {"role": args.role}
+        if args.role == 'guest':
+            user_metadata['daily_token_limit'] = 10000
+            user_metadata['max_questions_per_day'] = 5
+            
 
         # 4. Création/Mise à jour de l'utilisateur
         service.create_user(
