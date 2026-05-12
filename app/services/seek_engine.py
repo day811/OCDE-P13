@@ -194,9 +194,15 @@ class SeekEngine:
 
         search_query = standalone_query
         azure_filter = None
+        filters = []
+
         if has_explicit_geo:
-            if filter_city: azure_filter = f"location_city eq '{filter_city}'"
-            elif filter_dept: azure_filter = f"location_department eq '{filter_dept}'"
+            if filter_city: filters.append(f"location_city eq '{filter_city}'")
+            elif filter_dept: filters.append(f"location_department eq '{filter_dept}'")
+        
+        target_date_iso = target_date.strftime("%Y-%m-%dT00:00:00Z")
+        filters.append(f"last_date ge {target_date_iso}")
+        azure_filter = " and ".join(filters)
         
         # 3. Vector search
         store = self.vector_store._get_store()
