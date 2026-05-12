@@ -58,6 +58,25 @@ def setup_logging() -> None:
 # Trigger the setup immediately when app.config is imported
 setup_logging()
 
+_location_cache: dict = {"cities": [], "depts": [], "loaded": False}
+
+def get_cached_locations() -> tuple[list, list]:
+    """
+    Returns cached cities and departments.
+    Falls back to live fetch if cache is empty.
+    """
+    if not _location_cache["loaded"]:
+        warm_location_cache()
+    return _location_cache["cities"], _location_cache["depts"]
+
+def warm_location_cache() -> None:
+    """Forces a fresh load of geographic data into the cache."""
+    cities, depts = get_unique_locations()
+    _location_cache["cities"] = cities
+    _location_cache["depts"]  = depts
+    _location_cache["loaded"] = True
+
+
 def get_unique_locations() -> Tuple[List[str], List[str]]:
     """
     Retrieves unique cities and departments. 

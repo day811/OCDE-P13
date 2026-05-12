@@ -10,17 +10,32 @@ UserSettings and token usage are still managed via SettingsStorageService.
 import os
 import chainlit as cl
 from chainlit.input_widget import Select, Slider
-
+from chainlit.types import ThreadDict
+import logging 
 from app.services.seek_engine import SeekEngine
 from app.services.storage.user_storage import UserStorageService
 from app.services.storage.settings_storage import SettingsStorageService
 from app.services.storage.chainlit_storage import get_data_layer
-from app.config import get_unique_locations
+from app.config import get_cached_locations , warm_location_cache
+
+logger = logging.getLogger(__name__)
 
 # ── Data layer registration ────────────────────────────────────────────────────
 cl.data_layer(get_data_layer)
 
+# ── Geographic reference cache ─────────────────────────────────
+# Loaded once at app startup, shared across all modules
 
+_engine: SeekEngine 
+
+@cl.on_app_startup
+async def startup():
+    global _engine
+    warm_location_cache()   # charge villes/depts une fois
+    _engine = SeekEngine()  # SeekEngine appelle aussi get_unique_locations()
+    logger.info("App startup complete")
+
+    
 # ── Shared session initialisation ──────────────────────────────────────────────
 
 async def _init_session(user: cl.User) -> None:
@@ -32,9 +47,13 @@ async def _init_session(user: cl.User) -> None:
     Args:
         user (cl.User): The authenticated Chainlit user object.
     """
+    logger.info("_init_session: start")
     settings_service = SettingsStorageService()
     user_settings    = settings_service.get_settings(user.identifier)
-    all_cities, all_depts = get_unique_locations()
+    logger.info("_init_session: settings loaded")
+
+    all_cities, all_depts = get_cached_locations()
+    logger.info(f"_init_session: locations loaded ({len(all_cities)} cities)")
 
     await cl.ChatSettings([
         Select(
@@ -57,11 +76,14 @@ async def _init_session(user: cl.User) -> None:
             max=100
         )
     ]).send()
+    logger.info("_init_session: ChatSettings sent")
 
     cl.user_session.set("settings",         user_settings)
     cl.user_session.set("chat_history",     [])
-    cl.user_session.set("engine",           SeekEngine())
+    cl.user_session.set("engine",           _engine)
+    logger.info("_init_session: SeekEngine loaded")
     cl.user_session.set("settings_service", settings_service)
+    logger.info("_init_session: complete")
 
 
 # ── Authentication ─────────────────────────────────────────────────────────────
@@ -104,7 +126,7 @@ async def start():
 # ── Chat resume (loading existing conversation from left pane) ────────────────
 
 @cl.on_chat_resume
-async def resume(thread: dict):
+async def resume(thread: ThreadDict):
     """
     Restores session variables when an existing conversation is loaded
     from the left-pane history. Without this callback, on_message would
@@ -113,6 +135,7 @@ async def resume(thread: dict):
     Args:
         thread (dict): The thread metadata provided by Chainlit's data layer.
     """
+    logger.info(f"on_chat_resume triggered for thread: {thread.get('id', 'unknown')}")
     user = cl.user_session.get("user")
     await _init_session(user)
 

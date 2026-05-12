@@ -7,10 +7,11 @@ from typing import List, Dict, Any, Optional, Tuple
 from app.services.vector_store import VectorStoreService
 from app.services.query_parser import QueryParser
 from app.core.llm_factory import LLMFactory
-from app.config import get_unique_locations,normalize_str
+from app.config import get_cached_locations,normalize_str
 
 
 logger = logging.getLogger(__name__)
+
 
 class SeekEngine:
     """
@@ -24,7 +25,7 @@ class SeekEngine:
         
         # Load geographic reference data once at startup
         logger.info("SeekEngine: Loading geographic reference data...")
-        cities, depts = get_unique_locations()
+        cities, depts = get_cached_locations()
         self.parser = QueryParser(cities=cities, departments=depts)
 
     def _condense_query(self, user_query: str, chat_history: List[Dict[str, str]]) -> Tuple[str, Dict[str, int]]:
