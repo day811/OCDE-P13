@@ -163,7 +163,7 @@ class IngestionService:
 
                 # 3. Save to Silver (JSONL format)
                 if silver_to_save:
-                    silver_name = f"events_{datetime.now().strftime('%Y%m%d')}.jsonl"
+                    silver_name = f"events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
                     # Correctly joining JSON lines
                     self.storage.upload_json("silver", silver_name, silver_to_save) # type: ignore
 
