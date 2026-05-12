@@ -18,7 +18,7 @@ class SettingsStorageService:
     guest daily quotas (Azure Blob Storage).
 
     Storage split:
-        - settings_<user>.json  → Blob (gold) : city, dept, radius preferences
+        - settings_<user>.json  → Blob (gold) : city, dept, top_k preferences
         - daily_<user>.json     → Blob (gold) : guest daily question/token counters
         - token_usage table     → PostgreSQL  : per-message token records for Grafana
     """
@@ -41,14 +41,14 @@ class SettingsStorageService:
             user_id (str): Unique user identifier.
 
         Returns:
-            Dict[str, Any]: User preferences (city, dept, radius).
+            Dict[str, Any]: User preferences (city, dept, top_k).
         """
         filename = self._get_settings_filename(user_id)
         data = self.storage.download_json(self.container_name, filename)
         return data or {
             "favorite_city": None,
             "favorite_dept": None,
-            "radius_km":     20
+            "top_k":     5
         }
 
     def save_settings(self, user_id: str, settings: Dict[str, Any]) -> bool:

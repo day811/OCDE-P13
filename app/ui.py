@@ -69,11 +69,12 @@ async def _init_session(user: cl.User) -> None:
             initial_value=user_settings.get("favorite_dept") or "Aucun"
         ),
         Slider(
-            id="radius_km",
-            label="Rayon (km)",
-            initial=user_settings.get("radius_km", 20),
-            min=5,
-            max=100
+            id="top_k",
+            label="Nombre de résultats souhaités",
+            initial=user_settings.get("top_k", 5),
+            min=1,
+            max=10,
+            step=1
         )
     ]).send()
     logger.info("_init_session: ChatSettings sent")
@@ -207,7 +208,8 @@ async def main(message: cl.Message):
         user_id=user.identifier,
         chat_history=history,
         fav_city=user_settings.get("favorite_city"),
-        fav_dept=user_settings.get("favorite_dept")
+        fav_dept=user_settings.get("favorite_dept"),
+        top_k=int(user_settings.get("top_k", 5))
     ):
         if isinstance(chunk, str):
             full_answer += chunk
