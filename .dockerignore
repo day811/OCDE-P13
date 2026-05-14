@@ -10,3 +10,4 @@ tests/*.git/*
 notebooks/*
 .venv/*
 .env*
+scripts/generate_locations.py
