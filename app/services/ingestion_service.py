@@ -37,6 +37,9 @@ class IngestionService:
         self.today = datetime.now().date()
         self.stats = {"total_raw": 0, "indexed": 0, "skipped": 0}
 
+        self._session_cities: set = set()
+        self._session_depts:  set = set()
+
     def _is_upcoming(self, event_metadata: Dict[str, Any]) -> bool:
         """
         Implements the 90% reduction strategy for the Search Index (Gold).
@@ -121,6 +124,33 @@ class IngestionService:
 
         logger.error(f"Max retries reached for offset {offset}. Skipping batch.")
         return []
+    
+    def _update_locations_cache(self) -> None:
+        """
+        Updates gold/locations.json with all unique cities and departments
+        collected during this ingestion session.
+        Called once at the end of run() to keep the locations cache fresh.
+        """
+        if not self._session_cities and not self._session_depts:
+            return
+
+        # Merge with existing locations file if present
+        existing = self.storage.download_json(self.container_settings, "locations.json") or \
+                {"cities": [], "departments": []}
+
+        merged_cities = set(existing.get("cities", [])) | self._session_cities
+        merged_depts  = set(existing.get("departments", [])) | self._session_depts
+
+        locations = {
+            "cities":      sorted(merged_cities, key=lambda x: x.lower()),
+            "departments": sorted(merged_depts,  key=lambda x: x.lower()),
+            "last_updated": datetime.now().isoformat(),
+        }
+        self.storage.upload_json(self.container_settings, "locations.json", locations)
+        logger.info(
+            f"locations.json updated: "
+            f"{len(locations['cities'])} cities, {len(locations['departments'])} depts"
+        )
 
     async def run(self, max_records: Optional[int] = None):
         """ Executes the incremental ingestion pipeline. """
@@ -153,7 +183,12 @@ class IngestionService:
                     chunks = self.processor.transform(raw_event)
                     
                     if chunks:
-                        silver_to_save.append(chunks[0]['metadata'])
+                        meta = chunks[0]['metadata']
+                        if meta.get('location_city'):
+                            self._session_cities.add(meta['location_city'])
+                        if meta.get('location_department'):
+                            self._session_depts.add(meta['location_department'])                            
+                        silver_to_save.append(meta)
                         manifest["stats"]["silver_valid"] += 1
                         
                         if self._is_upcoming(chunks[0]['metadata']):
@@ -189,5 +224,5 @@ class IngestionService:
             
             if keep_running:
                 current_ts = last_ts # type: ignore
-
+        self._update_locations_cache()
         logger.info(f"Ingestion finished: {manifest['stats']}")

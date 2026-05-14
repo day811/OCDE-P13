@@ -9,7 +9,7 @@ UserSettings and token usage are still managed via SettingsStorageService.
 
 import os
 import chainlit as cl
-from chainlit.input_widget import Select, Slider
+from chainlit.input_widget import Select, Slider, TextInput
 from chainlit.types import ThreadDict
 import logging 
 from app.services.seek_engine import SeekEngine
@@ -52,15 +52,15 @@ async def _init_session(user: cl.User) -> None:
     user_settings    = settings_service.get_settings(user.identifier)
     logger.info("_init_session: settings loaded")
 
-    all_cities, all_depts = get_cached_locations()
-    logger.info(f"_init_session: locations loaded ({len(all_cities)} cities)")
+    _ , all_depts = get_cached_locations()
+    logger.info(f"_init_session: locations loaded ({len(all_depts)} departments)")
 
     await cl.ChatSettings([
-        Select(
+        TextInput(
             id="favorite_city",
             label="Ville par défaut",
-            values=["Aucun"] + all_cities,
-            initial_value=user_settings.get("favorite_city") or "Aucun"
+            initial=user_settings.get("favorite_city") or "",
+            placeholder="ex: Toulouse"
         ),
         Select(
             id="favorite_dept",

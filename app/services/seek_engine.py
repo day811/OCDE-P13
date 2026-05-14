@@ -1,7 +1,7 @@
 import json
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 
 from app.services.vector_store import VectorStoreService
@@ -54,7 +54,7 @@ class SeekEngine:
         
         response = self.llm.invoke(prompt)
         usage = response.usage_metadata
-        
+        logger.info(f"Condensed query : {response.content}")
         return response.content, { # type: ignore
             "input": usage.get("input_tokens", 0), # type: ignore
             "output": usage.get("output_tokens", 0) # type: ignore
@@ -179,31 +179,56 @@ class SeekEngine:
             str: Streamed text fragments of the LLM answer.
             dict: Final metadata dict with keys ``full_answer``, ``sources``, and ``usage``.
         """
+        logger.info(f"New query -> {user_query}")
+        logger.info(f"Settings -> fav_city : {fav_city} - fav_dept : {fav_dept} - top_k : {top_k}")
+
+        # 0. check existence of geo-constraints in initial query
+        user_query_for_condensation = user_query       
+        first_conv = len(chat_history) ==0
+        if first_conv :
+            geo_constraints = self.parser.parse_geo(user_query)
+            has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
+            if not has_explicit_geo:
+                geo_hint = fav_city or fav_dept
+                if geo_hint: 
+                    user_query_for_condensation = f"{user_query} à {geo_hint}"
+                    logger.info(f"User settings improved query : {user_query_for_condensation}")
+                else:
+                    yield "Merci de Préciser le lieu de votre recherche."
+                    return
+
         # 1. Condense follow-up into a standalone query (synchronous — fast)
-        standalone_query, condensation_usage = self._condense_query(user_query, chat_history)
-        
+        standalone_query, condensation_usage = self._condense_query(user_query_for_condensation, chat_history)
+
         # 2. Parsing & Geo Logic
         target_date, tolerance = self.parser.parse_date(standalone_query)
         geo_constraints = self.parser.parse_geo(standalone_query)
-        has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
-        effective_city = geo_constraints["city"] if has_explicit_geo else fav_city
-        effective_dept = geo_constraints["dept"] if has_explicit_geo else fav_dept
-        
-        filter_city = normalize_str(effective_city) if effective_city else None
-        filter_dept = normalize_str(effective_dept) if effective_dept else None 
 
+        has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
+        if not has_explicit_geo:
+            yield "Merci de vérifier l'orthographe du lieu de votre recherche."
+            return
+
+        effective_city = geo_constraints["city"] 
+        effective_dept = geo_constraints["dept"] 
+        
         search_query = standalone_query
         azure_filter = None
         filters = []
 
         if has_explicit_geo:
-            if filter_city: filters.append(f"location_city eq '{filter_city}'")
-            elif filter_dept: filters.append(f"location_department eq '{filter_dept}'")
-        
-        target_date_iso = target_date.strftime("%Y-%m-%dT00:00:00Z")
-        filters.append(f"last_date ge {target_date_iso}")
+            if effective_city: filters.append(f"location_city eq '{effective_city}'")
+            elif effective_dept: filters.append(f"location_department eq '{effective_dept}'")
+
+        logger.info(f"City constraint : {effective_city}")
+        logger.info(f"Dept constraint : {effective_dept}")        
+        logger.info(f"Time constraint : target -> {target_date}, tolerance -> {tolerance}")
+
+#        target_date_utc = target_date.replace(tzinfo=timezone.utc)
+#        target_date_iso = target_date_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+#        filters.append(f"last_date ge {target_date_iso}")
         azure_filter = " and ".join(filters)
-        
+
         # 3. Vector search
         store = self.vector_store._get_store()
         multiplier = 10 if os.getenv('ENV', 'LOCAL') != 'LOCAL' else 40
