@@ -211,12 +211,21 @@ async def main(message: cl.Message):
         fav_dept=user_settings.get("favorite_dept"),
         top_k=int(user_settings.get("top_k", 5))
     ):
-        if isinstance(chunk, str):
+        if isinstance(chunk, dict) and chunk.get("type") == "step":
+            # Display an intermediate reasoning step in the Chainlit UI.
+            # Steps are shown collapsed by default and expand on click.
+            async with cl.Step(name=chunk["name"], type="run") as step:
+                step.output = chunk["content"]
+ 
+        elif isinstance(chunk, str):
+            # Accumulate and stream each LLM token to the message bubble
             full_answer += chunk
             await res_msg.stream_token(chunk)
-        elif isinstance(chunk, dict):
+ 
+        elif isinstance(chunk, dict) and "usage" in chunk:
+            # Final metadata dict — capture for token footer
             metadata = chunk
-
+ 
     # 3. Persist token usage to PostgreSQL (async)
     usage      = metadata.get("usage", {"prompt": 0, "completion": 0, "total": 0})
     cumulative = await storage.update_usage(
