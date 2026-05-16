@@ -9,7 +9,26 @@ from app.config import normalize_str
 
 logger = logging.getLogger(__name__)
 
+GEO_PREPOSITIONS = [
+    r'a\s+',                     # à/a Toulouse (après normalize_str, à → a)
+    r'dans\s+',                  # dans Lyon
+    r'sur\s+',                   # sur Paris
+    r'autour\s+de\s+',           # autour de Nantes
+    r'pres\s+de\s+',             # près de (normalisé)
+    r'en\s+',                    # en Occitanie
+    r'ville\s+de\s+',            # ville de Montpellier
+    r'commune\s+de\s+',          # commune de ...
+    r'region\s+de\s+',           # région de (normalisé)
+    r'departement\s+du\s+',      # département du Gard
+    r'departement\s+de\s+la\s+', # département de la Loire
+    r'departement\s+de\s+l\s+',  # département de l'Hérault (normalisé → l espace)
+    r'departement\s+des\s+',     # département des Hautes-Pyrénées
+    r'departement\s+de\s+',      # département de ...
+]
+
 class QueryParser:
+
+    
     """
     Complete Query Parser service for P13, fully restored from P11 functionality.
     Handles temporal relative dates, city/department extraction, and string normalization.
@@ -104,25 +123,45 @@ class QueryParser:
         # Default fallback: next 30 days 
         return (today, 30)
 
+    def _build_geo_pattern(self, name_norm: str) -> str:
+        """
+        Builds a regex pattern that matches a city or department name
+        only when preceded by a geographic preposition.
+        This prevents false positives where a city name (e.g. 'Yves', 'Mont')
+        appears as a common word or proper noun unrelated to location.
+
+        Args:
+            name_norm (str): Normalized location name (lowercase, no accents).
+
+        Returns:
+            str: Regex pattern with geographic context requirement.
+        """
+        prepositions_pattern = '|'.join(GEO_PREPOSITIONS)
+        return rf'(?:{prepositions_pattern}){re.escape(name_norm)}\b'
+
     def parse_geo(self, query: str) -> Dict[str, Optional[str]]:
         """
-        Matches query against the pre-loaded city and department lists. 
+        Extracts geographic constraints (city and department) from a query.
+        Requires a geographic preposition before the location name to avoid
+        false positives with common words or first names that are also city names.
         """
         q = normalize_str(query)
         found_city = None
         found_dept = None
 
-        # Check Cities
+        # Check cities — require geographic context
         for city in self.cities:
             norm_city = normalize_str(city)
-            if re.search(rf'\b{norm_city}\b', q):
+            pattern = self._build_geo_pattern(norm_city)
+            if re.search(pattern, q):
                 found_city = norm_city
                 break
 
-        # Check Departments
+        # Check departments — require geographic context
         for dept in self.departments:
             norm_dept = normalize_str(dept)
-            if re.search(rf'\b{norm_dept}\b', q):
+            pattern = self._build_geo_pattern(norm_dept)
+            if re.search(pattern, q):
                 found_dept = norm_dept
                 break
 
