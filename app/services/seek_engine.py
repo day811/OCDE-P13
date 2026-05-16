@@ -10,6 +10,7 @@ from langchain_core.documents import Document
 
 from app.services.vector_store import VectorStoreService, AzureSearch
 from app.services.query_parser import QueryParser
+from app.services.web_search_service import WebSearchService
 from app.core.llm_factory import LLMFactory
 from app.config import get_cached_locations, normalize_str
 
@@ -26,6 +27,7 @@ class SeekEngine:
         """Initializes internal services and loads reference data."""
         self.vector_store = VectorStoreService()
         self.llm = LLMFactory.get_chat_model()
+        self._web_search: Optional[WebSearchService] = None
 
         # Native Azure Search client for OData date filtering
         # (LangChain wraps DateTimeOffset values in quotes, causing type errors)
@@ -189,6 +191,19 @@ class SeekEngine:
 
         logger.info(f"Native search returned {len(documents)} candidates")
         return documents
+    
+    def _get_web_search(self) -> WebSearchService:
+        """
+        Returns the WebSearchService instance, initialising it lazily on first use.
+        Lazy init avoids loading smolagents at app startup when it may not be needed.
+ 
+        Returns:
+            WebSearchService: Ready-to-use web search service instance.
+        """
+        if self._web_search is None:
+            self._web_search = WebSearchService()
+        return self._web_search
+ 
 
     async def _generate_answer_stream(self, user_query: str, context: str,
                                       chat_history: List[Dict[str, str]]):
@@ -340,9 +355,67 @@ class SeekEngine:
         yield {"type": "step", "name": "✅ Événements retenus", "content": f"{len(validated_entries)} événement(s) sélectionné(s)"}
 
         if not validated_entries:
-            yield "Désolé, aucun événement trouvé pour ces critères."
+            # No results from the index — trigger web search fallback
+            yield {
+                "type": "step",
+                "name": "🌐 Recherche web",
+                "content": (
+                    f"Aucun résultat dans l'index pour '{effective_city or effective_dept}'. "
+                    f"Recherche sur les sites événementiels..."
+                )
+            }
+ 
+            # Run synchronous smolagents search in a thread to avoid blocking the event loop
+            import asyncio
+            web_results = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self._get_web_search().search_events(
+                    city=effective_city,
+                    dept=effective_dept,
+                    target_date=target_date,
+                    tolerance=tolerance,
+                    user_query=user_query,
+                )
+            )
+ 
+            if not web_results:
+                yield "Désolé, aucun événement trouvé ni dans l'index ni sur le web."
+                return
+ 
+            # Generate a response from web results using the LLM
+            web_prompt = (
+                f"L'utilisateur cherche : '{user_query}'\n\n"
+                f"Voici des événements trouvés sur le web :\n{web_results}\n\n"
+                f"Présente ces événements de façon conviviale en français. "
+                f"Précise clairement que ces résultats proviennent d'une recherche web "
+                f"et non de notre base de données. Mentionne les dates et les URLs."
+            )
+ 
+            yield "\n\n---\n*📡 Résultats complémentaires issus d'une recherche web :*\n\n"
+ 
+            full_answer = ""
+            total_input  = condensation_usage["input"]
+            total_output = condensation_usage["output"]
+ 
+            async for chunk in self.llm.astream(web_prompt):
+                content = chunk.content
+                full_answer += content
+                yield content
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    total_input  += chunk.usage_metadata.get("input_tokens", 0)
+                    total_output += chunk.usage_metadata.get("output_tokens", 0)
+ 
+            yield {
+                "full_answer": full_answer,
+                "sources": [],
+                "usage": {
+                    "prompt":     total_input,
+                    "completion": total_output,
+                    "total":      total_input + total_output
+                }
+            }
             return
-
+        
         full_context = "\n---\n".join([e["block"] for e in validated_entries])
 
         # 6. Stream the LLM answer
