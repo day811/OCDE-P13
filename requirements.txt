@@ -14,3 +14,4 @@ azure-search-documents
 azure-identity
 azure-cosmos 
 asyncpg
+smolagents
