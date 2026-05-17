@@ -173,60 +173,104 @@ async def on_settings_update(settings: dict):
 
 # ── Main message handler ───────────────────────────────────────────────────────
 
+# ── PATCH: replace the full on_message handler in app/ui.py ──────────────────
+
 @cl.on_message
 async def main(message: cl.Message):
     """
-    Handles incoming user messages:
-      1. Checks guest daily quota.
-      2. Streams the RAG engine response token by token.
-      3. Persists token usage to PostgreSQL.
-      4. Appends token usage to the response footer.
-      5. Updates the in-memory history (last 10 turns = 20 messages).
-
-    Note: Message persistence to the data layer is handled automatically
-    by Chainlit — no explicit save_message() call needed here.
+    Handles incoming user messages with a grouped step display:
+      - All RAG pipeline steps are nested inside a single collapsible parent step.
+      - The parent step collapses automatically once the answer starts streaming.
+      - Web search fallback shows a dedicated waiting indicator.
+      - Token usage footer is appended after streaming completes.
     """
     engine        = cl.user_session.get("engine")
-    history: list = cl.user_session.get("chat_history")
+    history       = cl.user_session.get("chat_history")
     user          = cl.user_session.get("user")
     user_settings = cl.user_session.get("settings")
     storage       = cl.user_session.get("settings_service")
 
-    # 1. Guest quota check
+    # Guest daily quota check
     quota = storage.check_daily_quota(user.identifier, user.metadata)
     if not quota["allowed"]:
         await cl.Message(content=quota["reason"]).send()
         return
 
-    # 2. Stream response
-    res_msg     = cl.Message(content="")
-    full_answer = ""
-    metadata    = {}
+    # Accumulators
+    full_answer  = ""
+    metadata     = {}
+    step_buffer  = {}   # Accumulates step content by name before display
+    web_step     = None # Reference to the web search step for live updates
 
-    async for chunk in engine.search(
-        user_query=message.content,
-        user_id=user.identifier,
-        chat_history=history,
-        fav_city=user_settings.get("favorite_city"),
-        fav_dept=user_settings.get("favorite_dept"),
-        top_k=int(user_settings.get("top_k", 5))
-    ):
-        if isinstance(chunk, dict) and chunk.get("type") == "step":
-            # Display an intermediate reasoning step in the Chainlit UI.
-            # Steps are shown collapsed by default and expand on click.
-            async with cl.Step(name=chunk["name"], type="run") as step:
-                step.output = chunk["content"]
- 
-        elif isinstance(chunk, str):
-            # Accumulate and stream each LLM token to the message bubble
-            full_answer += chunk
-            await res_msg.stream_token(chunk)
- 
-        elif isinstance(chunk, dict) and "usage" in chunk:
-            # Final metadata dict — capture for token footer
-            metadata = chunk
- 
-    # 3. Persist token usage to PostgreSQL (async)
+    # ── Single collapsible parent step ─────────────────────────────────────────
+    # All pipeline steps are nested inside this parent.
+    # It collapses once the LLM answer begins streaming.
+    async with cl.Step(name="⚙️ Analyse en cours...", type="run") as parent_step:
+
+        res_msg = cl.Message(content="")
+
+        async for chunk in engine.search(
+            user_query=message.content,
+            user_id=user.identifier,
+            chat_history=history,
+            fav_city=user_settings.get("favorite_city"),
+            fav_dept=user_settings.get("favorite_dept"),
+            top_k=int(user_settings.get("top_k", 5))
+        ):
+            # ── Step chunk: pipeline progress indicator ─────────────────────
+            if isinstance(chunk, dict) and chunk.get("type") == "step":
+                name    = chunk["name"]
+                content = chunk["content"]
+
+                if name == "🌐 Recherche web":
+                    # Web search: show a dedicated child step with waiting message
+                    # This step stays open during the long smolagents call
+                    web_step = cl.Step(
+                        name=name,
+                        type="run",
+                        parent_id=parent_step.id
+                    )
+                    await web_step.__aenter__()
+                    web_step.output = (
+                        "⏳ Recherche sur les sites événementiels...\n"
+                        "*(billetweb, eventbrite, openagenda, fnacspectacles...)*"
+                    )
+                    await web_step.update()
+                else:
+                    # Regular pipeline steps: accumulate and display as compact child steps
+                    async with cl.Step(
+                        name=name,
+                        type="run",
+                        parent_id=parent_step.id
+                    ) as child_step:
+                        child_step.output = content
+
+            # ── String chunk: LLM token streaming ──────────────────────────
+            elif isinstance(chunk, str):
+                # Close the web search step cleanly before streaming starts
+                if web_step is not None:
+                    web_step.output = "✅ Résultats web récupérés"
+                    await web_step.__aexit__(None, None, None)
+                    web_step = None
+
+                # Update parent step name to signal completion
+                if not full_answer:
+                    parent_step.name = "⚙️ Analyse terminée"
+
+                full_answer += chunk
+                await res_msg.stream_token(chunk)
+
+            # ── Final metadata dict ─────────────────────────────────────────
+            elif isinstance(chunk, dict) and "usage" in chunk:
+                metadata = chunk
+
+        # Update parent step summary before it collapses
+        parent_step.output = (
+            f"Analyse terminée · "
+            f"{metadata.get('usage', {}).get('total', 0)} tokens"
+        )
+
+    # ── Token usage footer ──────────────────────────────────────────────────────
     usage      = metadata.get("usage", {"prompt": 0, "completion": 0, "total": 0})
     cumulative = await storage.update_usage(
         user.identifier,
@@ -235,11 +279,9 @@ async def main(message: cl.Message):
         usage.get("completion", 0)
     )
 
-    # 4. Increment guest daily counter
     if user.metadata.get("role") == "guest":
         storage.increment_daily_usage(user.identifier, usage.get("total", 0))
 
-    # 5. Token usage footer
     res_msg.content = (
         full_answer
         + f"\n\n*(Consommation : {usage['total']} tokens"
@@ -247,7 +289,7 @@ async def main(message: cl.Message):
     )
     await res_msg.send()
 
-    # 6. Update in-memory history
+    # ── Update in-memory history ────────────────────────────────────────────────
     history.append({"role": "user",      "content": message.content})
     history.append({"role": "assistant", "content": full_answer})
     cl.user_session.set("chat_history", history[-20:])
