@@ -15,3 +15,5 @@ azure-identity
 azure-cosmos 
 asyncpg
 smolagents
+smolagents[litellm]
+ddgs
