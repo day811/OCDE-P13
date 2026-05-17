@@ -91,14 +91,18 @@ class SeekEngine:
             Tuple[bool, List[str]]: A boolean indicating validity and a list of matching date
             strings formatted as "DD/MM/YYYY à HH:MM".
         """
+        title = meta.get("title_fr", "?")[:50]
         city: str = meta.get("location_city", "")
         dept: str = meta.get("location_department", "")
+        score = meta.get("_search_score", 0)
 
         # 1. Geographic Validation
         if (geo_constraints["city"] and city != "" and
                 normalize_str(geo_constraints["city"]) != normalize_str(city)):
+            logger.debug(f"REJECTED geo | score={score:.4f} | {city} | {title}")
             return False, []
         if geo_constraints["dept"] and normalize_str(geo_constraints["dept"]) != normalize_str(dept):
+            logger.debug(f"REJECTED geo | score={score:.4f} | {city} | {title}")
             return False, []
 
         # 2. Temporal Validation
@@ -113,6 +117,10 @@ class SeekEngine:
                     matching_dates.append(start_dt.strftime("%d/%m/%Y à %H:%M"))
             except (ValueError, KeyError, TypeError):
                 continue
+        if matching_dates:
+            logger.info(f"VALIDATED | score={score:.4f} | {city} | {title} | {matching_dates}")
+        else:
+            logger.debug(f"REJECTED temporal | score={score:.4f} | {city} | {title}")
 
         return (len(matching_dates) > 0), matching_dates
 
@@ -137,30 +145,16 @@ class SeekEngine:
             f"URL: {meta.get('canonicalurl')}\n"
         )
 
-    def _native_search(
-        self,
-        search_query: str,
-        odata_filter: str,
-        top_k: int
-    ) -> List[Document]:
+    def _native_search(self, search_query, odata_filter, top_k,
+                    min_score: float = 2.0) -> List[Document]:
         """
-        Executes a hybrid search using the native Azure Search SDK.
-        Bypasses LangChain to avoid its DateTimeOffset quoting bug.
-
-        Azure Search SDK passes DateTimeOffset values without quotes in OData
-        expressions, which is the correct format. LangChain wraps them in
-        single quotes, causing a type mismatch error.
-
+        ...
         Args:
-            search_query (str): The standalone search query string.
-            odata_filter (str): OData filter expression (geo + date constraints).
-            top_k (int): Maximum number of documents to retrieve.
-
-        Returns:
-            List[Document]: LangChain-compatible Document objects with metadata.
+            min_score (float): Minimum hybrid search score threshold.
+                            Candidates below this score are discarded.
+                            Azure hybrid scores typically range 0.01–3.0.
+                            Default 0.02 filters the weakest matches.
         """
-        logger.info(f"Native search — filter: {odata_filter} | top_k: {top_k}")
-
         results = self._azure_client.search(
             search_text=search_query,
             filter=odata_filter if odata_filter else None,
@@ -172,24 +166,42 @@ class SeekEngine:
         )
 
         documents = []
+        seen_uids  = set()
+
         for r in results:
+            score = r.get("@search.score", 0)
+            
+            # Filter out weak semantic matches
+            if score < min_score:
+                logger.debug(f"Discarded candidate score={score:.4f} (below threshold {min_score})")
+                continue
+
+            logger.info(f"Candidate score={score:.4f} city={r.get('location_city')}")
+            
             try:
                 meta = json.loads(r.get("metadata", "{}"))
             except (json.JSONDecodeError, TypeError):
                 meta = {}
 
-            # Ensure top-level search fields are accessible in metadata
+            uid = meta.get("uid")
+            if uid and uid in seen_uids:
+                logger.debug(f"Skipping duplicate chunk uid={uid} score={score:.2f}")
+                continue
+            if uid:
+                seen_uids.add(uid)
+
             meta["location_city"]       = r.get("location_city") or meta.get("location_city", "")
             meta["location_department"] = r.get("location_department") or meta.get("location_department", "")
             meta["last_date"]           = r.get("last_date")
             meta["occurrence_dates"]    = r.get("occurrence_dates", [])
+            meta["_search_score"]       = score  # Keep for debugging
 
             documents.append(Document(
                 page_content=r.get("content", ""),
                 metadata=meta
             ))
 
-        logger.info(f"Native search returned {len(documents)} candidates")
+        logger.info(f"Native search: {len(documents)} candidates above score threshold {min_score}")
         return documents
     
     def _get_web_search(self) -> WebSearchService:
@@ -291,8 +303,8 @@ class SeekEngine:
 
 
         # 2. Parse date and geo constraints from the condensed query
-        target_date, tolerance = self.parser.parse_date(standalone_query)
-        geo_constraints = self.parser.parse_geo(standalone_query)
+        target_date, tolerance, cleaned_after_date = self.parser.parse_date(standalone_query)
+        geo_constraints = self.parser.parse_geo(cleaned_after_date)
 
         has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
         if not has_explicit_geo:
@@ -301,6 +313,7 @@ class SeekEngine:
 
         effective_city = geo_constraints["city"]        
         effective_dept = geo_constraints["dept"]
+        thematic_query   = geo_constraints["cleaned"]
 
         yield {"type": "step", "name": "📅 Contraintes détectées", "content": (
             f"📍 Lieu : {effective_city or effective_dept or 'Non spécifié'}\n"
@@ -309,6 +322,7 @@ class SeekEngine:
 
         logger.info(f"City constraint : {effective_city}")
         logger.info(f"Dept constraint : {effective_dept}")
+        logger.info(f"Thematic query : {thematic_query}")
 
         # 3. Build OData filter — geo + temporal
         # DateTimeOffset values MUST be passed WITHOUT quotes in OData.
@@ -327,11 +341,12 @@ class SeekEngine:
         odata_filter = " and ".join(odata_parts)
 
         # 4. Native Azure Search — bypasses LangChain DateTimeOffset quoting bug
-        multiplier = 10 if os.getenv("ENV", "LOCAL") != "LOCAL" else 40
+        multiplier = 4 if os.getenv("ENV", "LOCAL") != "LOCAL" else 20
         raw_candidates = self._native_search(
-            search_query=standalone_query,
+            search_query=thematic_query,
             odata_filter=odata_filter,
-            top_k=top_k * multiplier
+            top_k=top_k * multiplier,
+            min_score=3
         )
 
         yield {"type": "step", "name": "🗂️ Recherche dans l'index", "content": f"{len(raw_candidates)} candidats trouvés"}
