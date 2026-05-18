@@ -252,85 +252,87 @@ class SeekEngine:
         async for chunk in self.llm.astream(prompt):
             yield chunk
 
-    async def search(self, user_query: str, user_id: str,
-                     chat_history: List[Dict[str, str]] = [],
-                     fav_city: Optional[str] = None,
-                     fav_dept: Optional[str] = None,
-                     top_k: int = 5):
+    # ── SearchConstraints dataclass ────────────────────────────────────────────
+
+    def _enrich_query_with_geo(
+        self,
+        user_query: str,
+        chat_history: List[Dict[str, str]],
+        fav_city: Optional[str],
+        fav_dept: Optional[str]
+    ) -> str:
         """
-        Async RAG pipeline that yields response tokens followed by a final metadata dict.
+        On the first conversation turn only, injects the user's preferred
+        city/department into the query if no explicit geographic constraint
+        is detected. This embeds the location in the condensed query so it
+        is preserved in future turns.
 
         Args:
-            user_query (str): The latest user question.
-            user_id (str): Identifier of the requesting user.
-            chat_history (List[Dict[str, str]]): Previous conversation turns.
-            fav_city (Optional[str]): User's preferred city (fallback if no city in query).
-            fav_dept (Optional[str]): User's preferred department (fallback).
-            top_k (int): Maximum number of validated events to include in the context.
+            user_query   : Raw user question.
+            chat_history : Previous conversation turns.
+            fav_city     : User's preferred city setting.
+            fav_dept     : User's preferred department setting.
 
-        Yields:
-            str: Streamed text fragments of the LLM answer.
-            dict: Final metadata dict with keys full_answer, sources, and usage.
+        Returns:
+            str: The query, potentially enriched with a geographic hint.
+
+        Raises:
+            StopAsyncIteration: Signals the caller to yield an error message
+            and return early if no geo hint is available on the first turn.
         """
-        logger.info(f"New query -> {user_query}")
-        logger.info(f"Settings -> fav_city : {fav_city} - fav_dept : {fav_dept} - top_k : {top_k}")
+        if len(chat_history) > 0:
+            return user_query  # Not the first turn — never inject
 
-        # 0. First-question geo enrichment
-        # On the first question only, if no explicit geo constraint is found,
-        # inject fav_city/fav_dept into the query before condensation so that
-        # the geographic context is embedded in the standalone query and
-        # preserved in future condensed turns.
-        user_query_for_condensation = user_query
-        first_conv = len(chat_history) == 0
+        geo = self.parser.parse_geo(user_query)
+        if geo["city"] or geo["dept"]:
+            return user_query  # Explicit geo found in query
 
-        if first_conv:
-            geo_constraints = self.parser.parse_geo(user_query)
-            has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
-            if not has_explicit_geo:
-                geo_hint = fav_city or fav_dept
-                if geo_hint:
-                    user_query_for_condensation = f"{user_query} à {geo_hint}"
-                    logger.info(f"User settings improved query : {user_query_for_condensation}")
-                else:
-                    yield "Merci de préciser le lieu de votre recherche."
-                    return
+        geo_hint = fav_city or fav_dept
+        if not geo_hint:
+            raise ValueError("no_geo_hint")  # Caller must yield error and return
 
-        # 1. Condense follow-up into a standalone query
-        standalone_query, condensation_usage = self._condense_query(
-            user_query_for_condensation, chat_history
-        )
-        yield {"type": "step", "name": "🔍 Analyse de la question", "content": f"Requête reformulée : *{standalone_query}*"}        
+        enriched = f"{user_query} à {geo_hint}"
+        logger.info(f"User settings improved query: {enriched}")
+        return enriched
 
+    def _parse_constraints(
+        self,
+        standalone_query: str
+    ) -> Dict[str, Any]:
+        """
+        Parses temporal and geographic constraints from a condensed standalone query.
+        Strips date and geo spans from the query to produce a clean thematic query
+        for semantic search.
 
-        # 2. Parse date and geo constraints from the condensed query
+        Args:
+            standalone_query (str): Condensed query from _condense_query().
+
+        Returns:
+            dict: {
+                'target_date'   : datetime,
+                'tolerance'     : int,
+                'effective_city': str | None,
+                'effective_dept': str | None,
+                'thematic_query': str,
+                'odata_filter'  : str,
+            }
+
+        Raises:
+            ValueError: If no geographic constraint is found after parsing.
+        """
         target_date, tolerance, cleaned_after_date = self.parser.parse_date(standalone_query)
-        geo_constraints = self.parser.parse_geo(cleaned_after_date)
+        geo = self.parser.parse_geo(cleaned_after_date)
 
-        has_explicit_geo = geo_constraints["city"] or geo_constraints["dept"]
-        if not has_explicit_geo:
-            yield "Merci de vérifier l'orthographe du lieu de votre recherche."
-            return
+        effective_city = geo["city"]
+        effective_dept = geo["dept"]
+        thematic_query = geo["cleaned"]
 
-        effective_city = geo_constraints["city"]        
-        effective_dept = geo_constraints["dept"]
-        thematic_query   = geo_constraints["cleaned"]
+        if not effective_city and not effective_dept:
+            raise ValueError("no_geo_constraint")
 
-        yield {"type": "step", "name": "📅 Contraintes détectées", "content": (
-            f"📍 Lieu : {effective_city or effective_dept or 'Non spécifié'}\n"
-            f"🗓️ Date cible : {target_date.strftime('%d/%m/%Y')} (±{tolerance} jours)"
-        )}
-
-        logger.info(f"City constraint : {effective_city}")
-        logger.info(f"Dept constraint : {effective_dept}")
-        logger.info(f"Thematic query : {thematic_query}")
-
-        # 3. Build OData filter — geo + temporal
-        # DateTimeOffset values MUST be passed WITHOUT quotes in OData.
-        # LangChain's similarity_search wraps them in single quotes, causing
-        # a type mismatch error. We use the native Azure Search SDK instead.
+        # Build OData filter (DateTimeOffset without quotes — LangChain bug workaround)
         target_date_utc = target_date.replace(tzinfo=timezone.utc)
         target_date_iso = target_date_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-        logger.info(f"Date filter : last_date ge {target_date_iso} (tolerance {tolerance}d)")
 
         odata_parts = []
         if effective_city:
@@ -340,120 +342,266 @@ class SeekEngine:
         odata_parts.append(f"last_date ge {target_date_iso}")
         odata_filter = " and ".join(odata_parts)
 
-        # 4. Native Azure Search — bypasses LangChain DateTimeOffset quoting bug
+        logger.info(f"City constraint   : {effective_city}")
+        logger.info(f"Dept constraint   : {effective_dept}")
+        logger.info(f"Thematic query    : {thematic_query}")
+        logger.info(f"Date filter       : last_date ge {target_date_iso} (tolerance {tolerance}d)")
+
+        return {
+            "target_date":    target_date,
+            "tolerance":      tolerance,
+            "effective_city": effective_city,
+            "effective_dept": effective_dept,
+            "thematic_query": thematic_query or standalone_query,
+            "odata_filter":   odata_filter,
+        }
+
+    def _retrieve_and_validate(
+        self,
+        constraints: Dict[str, Any],
+        top_k: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Runs the native Azure Search and applies post-retrieval validation
+        (geographic + temporal fine-grained check on event timings).
+
+        Args:
+            constraints : Output of _parse_constraints().
+            top_k       : Maximum number of validated events to return.
+
+        Returns:
+            List of validated entry dicts with keys 'block' and 'metadata'.
+        """
         multiplier = 4 if os.getenv("ENV", "LOCAL") != "LOCAL" else 20
+
         raw_candidates = self._native_search(
-            search_query=thematic_query,
-            odata_filter=odata_filter,
+            search_query=constraints["thematic_query"],
+            odata_filter=constraints["odata_filter"],
             top_k=top_k * multiplier,
             min_score=3
         )
 
-        yield {"type": "step", "name": "🗂️ Recherche dans l'index", "content": f"{len(raw_candidates)} candidats trouvés"}
-
-        # 5. Post-retrieval validation (temporal + geo fine-grained check)
+        geo_filter = {
+            "city": constraints["effective_city"],
+            "dept": constraints["effective_dept"],
+        }
         validated_entries = []
-        geo_filter = {"city": effective_city, "dept": effective_dept}
 
         for doc in raw_candidates:
             is_valid, matching_dates = self._validate_event(
-                doc.metadata, target_date, tolerance, geo_filter
+                doc.metadata,
+                constraints["target_date"],
+                constraints["tolerance"],
+                geo_filter
             )
             if is_valid:
-                context_block = self._build_context_block(
+                block = self._build_context_block(
                     doc.metadata, matching_dates, doc.page_content
                 )
-                validated_entries.append({"block": context_block, "metadata": doc.metadata})
+                validated_entries.append({"block": block, "metadata": doc.metadata})
             if len(validated_entries) >= top_k:
                 break
 
-        yield {"type": "step", "name": "✅ Événements retenus", "content": f"{len(validated_entries)} événement(s) sélectionné(s)"}
+        return validated_entries
 
-        if not validated_entries:
-            # No results from the index — trigger web search fallback
-            yield {
-                "type": "step",
-                "name": "🌐 Recherche web",
-                "content": (
-                    f"Aucun résultat dans l'index pour '{effective_city or effective_dept}'. "
-                    f"Recherche sur les sites événementiels..."
-                )
-            }
- 
-            # Run synchronous smolagents search in a thread to avoid blocking the event loop
-            import asyncio
-            web_results = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self._get_web_search().search_events(
-                    city=effective_city,
-                    dept=effective_dept,
-                    target_date=target_date,
-                    tolerance=tolerance,
-                    user_query=user_query,
-                )
+    async def _web_search_fallback(
+        self,
+        user_query: str,
+        constraints: Dict[str, Any],
+        condensation_usage: Dict[str, int]
+    ):
+        """
+        Fallback async generator triggered when the index returns zero validated
+        results. Delegates to WebSearchService (smolagents + DuckDuckGo) and
+        streams the LLM-formatted response.
+
+        Yields str tokens and a final metadata dict, matching the same protocol
+        as the main search() generator so the caller (ui.py) needs no changes.
+
+        Args:
+            user_query         : Original user question (for display context).
+            constraints        : Output of _parse_constraints().
+            condensation_usage : Token usage from the condensation step.
+        """
+        yield {
+            "type": "step",
+            "name": "🌐 Recherche web",
+            "content": (
+                f"Aucun résultat dans l'index pour "
+                f"'{constraints['effective_city'] or constraints['effective_dept']}'. "
+                f"Recherche sur les sites événementiels..."
             )
- 
-            if not web_results:
-                yield "Désolé, aucun événement trouvé ni dans l'index ni sur le web."
-                return
- 
-            # Generate a response from web results using the LLM
-            web_prompt = (
-                f"L'utilisateur cherche : '{user_query}'\n\n"
-                f"Voici des événements trouvés sur le web :\n{web_results}\n\n"
-                f"Présente ces événements de façon conviviale en français. "
-                f"Précise clairement que ces résultats proviennent d'une recherche web "
-                f"et non de notre base de données. Mentionne les dates et les URLs."
+        }
+
+        import asyncio
+        web_results = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._get_web_search().search_events(
+                city=constraints["effective_city"],
+                dept=constraints["effective_dept"],
+                target_date=constraints["target_date"],
+                tolerance=constraints["tolerance"],
+                user_query=user_query,
             )
- 
-            yield "\n\n---\n*📡 Résultats complémentaires issus d'une recherche web :*\n\n"
- 
-            full_answer = ""
-            total_input  = condensation_usage["input"]
-            total_output = condensation_usage["output"]
- 
-            async for chunk in self.llm.astream(web_prompt):
-                content = chunk.content
-                full_answer += content
-                yield content
-                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                    total_input  += chunk.usage_metadata.get("input_tokens", 0)
-                    total_output += chunk.usage_metadata.get("output_tokens", 0)
- 
-            yield {
-                "full_answer": full_answer,
-                "sources": [],
-                "usage": {
-                    "prompt":     total_input,
-                    "completion": total_output,
-                    "total":      total_input + total_output
-                }
-            }
+        )
+
+        if not web_results:
+            yield "Désolé, aucun événement trouvé ni dans l'index ni sur le web."
             return
-        
-        full_context = "\n---\n".join([e["block"] for e in validated_entries])
 
-        # 6. Stream the LLM answer
-        full_answer = ""
+        web_prompt = (
+            f"L'utilisateur cherche : '{user_query}'\n\n"
+            f"Voici des événements trouvés sur le web :\n{web_results}\n\n"
+            f"Présente ces événements de façon conviviale en français. "
+            f"Précise clairement que ces résultats proviennent d'une recherche web "
+            f"et non de notre base de données. "
+            f"IMPORTANT : Présente UNIQUEMENT les événements explicitement mentionnés "
+            f"avec leurs dates exactes. N'invente aucune information. "
+            f"Si aucun événement ne correspond exactement, dis-le et propose "
+            f"les événements proches comme alternatives."
+        )
+
+        yield "\n\n---\n*📡 Résultats complémentaires issus d'une recherche web :*\n\n"
+
+        full_answer  = ""
         total_input  = condensation_usage["input"]
         total_output = condensation_usage["output"]
 
-        async for chunk in self._generate_answer_stream(user_query, full_context, chat_history):
+        async for chunk in self.llm.astream(web_prompt):
             content = chunk.content
             full_answer += content
             yield content
-
             if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
                 total_input  += chunk.usage_metadata.get("input_tokens", 0)
                 total_output += chunk.usage_metadata.get("output_tokens", 0)
 
-        # 7. Final metadata yield
         yield {
             "full_answer": full_answer,
-            "sources": [e["metadata"] for e in validated_entries],
+            "sources":     [],
             "usage": {
                 "prompt":     total_input,
                 "completion": total_output,
-                "total":      total_input + total_output
+                "total":      total_input + total_output,
+            }
+        }
+
+    async def search(
+        self,
+        user_query: str,
+        user_id: str,
+        chat_history: List[Dict[str, str]] = [],
+        fav_city: Optional[str] = None,
+        fav_dept: Optional[str] = None,
+        top_k: int = 5
+    ):
+        """
+        Async RAG pipeline — orchestrates the full retrieval and generation flow.
+
+        Steps:
+            1. Geo enrichment on first turn (injects fav_city if needed)
+            2. Query condensation (LLM rephrasing for follow-up questions)
+            3. Constraint parsing (date + geo + thematic query extraction)
+            4. Index retrieval + post-retrieval validation
+            5a. Web search fallback if index returns nothing
+            5b. LLM answer streaming from index results
+
+        Args:
+            user_query   : The latest user question.
+            user_id      : Identifier of the requesting user.
+            chat_history : Previous conversation turns (role/content pairs).
+            fav_city     : User's preferred city (injected on first turn if needed).
+            fav_dept     : User's preferred department (fallback).
+            top_k        : Maximum number of validated events in the context.
+
+        Yields:
+            dict : Step progress indicators  { type:'step', name, content }
+            str  : Streamed LLM response tokens
+            dict : Final metadata            { full_answer, sources, usage }
+        """
+        logger.info(f"New query -> {user_query}")
+        logger.info(f"Settings -> fav_city:{fav_city} fav_dept:{fav_dept} top_k:{top_k}")
+
+        # ── 1. Geo enrichment (first turn only) ───────────────────────────────
+        try:
+            query_for_condensation = self._enrich_query_with_geo(
+                user_query, chat_history, fav_city, fav_dept
+            )
+        except ValueError:
+            yield "Merci de préciser le lieu de votre recherche."
+            return
+
+        # ── 2. Query condensation ─────────────────────────────────────────────
+        standalone_query, condensation_usage = self._condense_query(
+            query_for_condensation, chat_history
+        )
+        yield {
+            "type":    "step",
+            "name":    "🔍 Analyse de la question",
+            "content": f"Requête reformulée : *{standalone_query}*"
+        }
+
+        # ── 3. Constraint parsing ─────────────────────────────────────────────
+        try:
+            constraints = self._parse_constraints(standalone_query)
+        except ValueError:
+            yield "Merci de vérifier l'orthographe du lieu de votre recherche."
+            return
+
+        yield {
+            "type":    "step",
+            "name":    "📅 Contraintes détectées",
+            "content": (
+                f"📍 Lieu : {constraints['effective_city'] or constraints['effective_dept']}\n"
+                f"🗓️ Date cible : {constraints['target_date'].strftime('%d/%m/%Y')} "
+                f"(±{constraints['tolerance']} jours)"
+            )
+        }
+
+        # ── 4. Retrieval + validation ─────────────────────────────────────────
+        validated_entries = self._retrieve_and_validate(constraints, top_k)
+
+        yield {
+            "type":    "step",
+            "name":    "🗂️ Recherche dans l'index",
+            "content": f"{len(validated_entries)} événement(s) validé(s)"
+        }
+
+        yield {
+            "type":    "step",
+            "name":    "✅ Événements retenus",
+            "content": f"{len(validated_entries)} événement(s) sélectionné(s)"
+        }
+
+        # ── 5a. Web search fallback ───────────────────────────────────────────
+        if not validated_entries:
+            async for chunk in self._web_search_fallback(
+                user_query, constraints, condensation_usage
+            ):
+                yield chunk
+            return
+
+        # ── 5b. LLM answer streaming ──────────────────────────────────────────
+        full_context = "\n---\n".join([e["block"] for e in validated_entries])
+        full_answer  = ""
+        total_input  = condensation_usage["input"]
+        total_output = condensation_usage["output"]
+
+        async for chunk in self._generate_answer_stream(
+            user_query, full_context, chat_history
+        ):
+            content = chunk.content
+            full_answer += content
+            yield content
+            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                total_input  += chunk.usage_metadata.get("input_tokens", 0)
+                total_output += chunk.usage_metadata.get("output_tokens", 0)
+
+        yield {
+            "full_answer": full_answer,
+            "sources":     [e["metadata"] for e in validated_entries],
+            "usage": {
+                "prompt":     total_input,
+                "completion": total_output,
+                "total":      total_input + total_output,
             }
         }
