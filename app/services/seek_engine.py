@@ -1,5 +1,5 @@
 import json
-import os
+import os, re
 import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
@@ -12,7 +12,7 @@ from app.services.vector_store import VectorStoreService, AzureSearch
 from app.services.query_parser import QueryParser
 from app.services.web_search_service import WebSearchService
 from app.core.llm_factory import LLMFactory
-from app.config import get_cached_locations, normalize_str
+from app.config import get_cached_locations, normalize_location_name
 
 
 logger = logging.getLogger(__name__)
@@ -98,10 +98,10 @@ class SeekEngine:
 
         # 1. Geographic Validation
         if (geo_constraints["city"] and city != "" and
-                normalize_str(geo_constraints["city"]) != normalize_str(city)):
+                normalize_location_name(geo_constraints["city"]) != normalize_location_name(city)):
             logger.debug(f"REJECTED geo | score={score:.4f} | {city} | {title}")
             return False, []
-        if geo_constraints["dept"] and normalize_str(geo_constraints["dept"]) != normalize_str(dept):
+        if geo_constraints["dept"] and normalize_location_name(geo_constraints["dept"]) != normalize_location_name(dept):
             logger.debug(f"REJECTED geo | score={score:.4f} | {city} | {title}")
             return False, []
 
@@ -287,11 +287,17 @@ class SeekEngine:
         if geo["city"] or geo["dept"]:
             return user_query  # Explicit geo found in query
 
+        q_norm = normalize_location_name(user_query)
+        if re.search(r'\ben\s+france\b|\bpartout\s+en\s+france\b|\bfrance\b', q_norm):
+            return user_query
         geo_hint = fav_city or fav_dept
-        if not geo_hint:
-            raise ValueError("no_geo_hint")  # Caller must yield error and return
 
-        enriched = f"{user_query} à {geo_hint}"
+        enriched =user_query
+        if fav_city:
+            enriched = f"{enriched} dans la ville de {fav_city}"
+        if fav_dept:
+           enriched = f"{enriched} dans le département de {fav_dept}" 
+
         logger.info(f"User settings improved query: {enriched}")
         return enriched
 
@@ -327,9 +333,7 @@ class SeekEngine:
         effective_dept = geo["dept"]
         thematic_query = geo["cleaned"]
 
-        if not effective_city and not effective_dept:
-            raise ValueError("no_geo_constraint")
-
+ 
         # Build OData filter (DateTimeOffset without quotes — LangChain bug workaround)
         target_date_utc = target_date.replace(tzinfo=timezone.utc)
         target_date_iso = target_date_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -337,7 +341,7 @@ class SeekEngine:
         odata_parts = []
         if effective_city:
             odata_parts.append(f"location_city eq '{effective_city}'")
-        elif effective_dept:
+        if effective_dept:
             odata_parts.append(f"location_department eq '{effective_dept}'")
         odata_parts.append(f"last_date ge {target_date_iso}")
         odata_filter = " and ".join(odata_parts)
@@ -428,7 +432,7 @@ class SeekEngine:
             "name": "🌐 Recherche web",
             "content": (
                 f"Aucun résultat dans l'index pour "
-                f"'{constraints['effective_city'] or constraints['effective_dept']}'. "
+                f"'{constraints['effective_city']}-{constraints['effective_dept']}'. "
                 f"Recherche sur les sites événementiels..."
             )
         }
@@ -441,16 +445,21 @@ class SeekEngine:
                 dept=constraints["effective_dept"],
                 target_date=constraints["target_date"],
                 tolerance=constraints["tolerance"],
-                user_query=user_query,
+                user_query=constraints["thematic_query"],
             )
         )
 
         if not web_results:
             yield "Désolé, aucun événement trouvé ni dans l'index ni sur le web."
             return
+        enriched_query = user_query
+        if constraints["effective_city"]:
+            enriched_query = f"{enriched_query} dans la ville de {constraints['effective_city']}"
+        if constraints["effective_dept"]:
+           enriched_query = f"{enriched_query} dans le département de {constraints['effective_dept']}" 
 
         web_prompt = (
-            f"L'utilisateur cherche : '{user_query}'\n\n"
+            f"L'utilisateur cherche : '{enriched_query}'\n\n"
             f"Voici des événements trouvés sur le web :\n{web_results}\n\n"
             f"Présente ces événements de façon conviviale en français. "
             f"Précise clairement que ces résultats proviennent d'une recherche web "
@@ -522,13 +531,9 @@ class SeekEngine:
         logger.info(f"Settings -> fav_city:{fav_city} fav_dept:{fav_dept} top_k:{top_k}")
 
         # ── 1. Geo enrichment (first turn only) ───────────────────────────────
-        try:
-            query_for_condensation = self._enrich_query_with_geo(
-                user_query, chat_history, fav_city, fav_dept
+        query_for_condensation = self._enrich_query_with_geo(
+            user_query, chat_history, fav_city, fav_dept
             )
-        except ValueError:
-            yield "Merci de préciser le lieu de votre recherche."
-            return
 
         # ── 2. Query condensation ─────────────────────────────────────────────
         standalone_query, condensation_usage = self._condense_query(
@@ -541,17 +546,13 @@ class SeekEngine:
         }
 
         # ── 3. Constraint parsing ─────────────────────────────────────────────
-        try:
-            constraints = self._parse_constraints(standalone_query)
-        except ValueError:
-            yield "Merci de vérifier l'orthographe du lieu de votre recherche."
-            return
+        constraints = self._parse_constraints(standalone_query)
 
         yield {
             "type":    "step",
             "name":    "📅 Contraintes détectées",
             "content": (
-                f"📍 Lieu : {constraints['effective_city'] or constraints['effective_dept']}\n"
+                f"📍 City/Dept : {constraints['effective_city']} - {constraints['effective_dept']}\n"
                 f"🗓️ Date cible : {constraints['target_date'].strftime('%d/%m/%Y')} "
                 f"(±{constraints['tolerance']} jours)"
             )

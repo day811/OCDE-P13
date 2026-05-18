@@ -97,7 +97,16 @@ class WebSearchService:
         Returns:
             str: Agent response with formatted event results, or an error message.
         """
-        geo = city or dept or "France"
+        geo=[]
+        if city:
+            geo.append(f" in city of {city}")
+        if dept:
+            geo.append(f" in department of {dept}")
+        if not geo:
+            geo.append(" in France")
+        
+        geo_txt = " and".join(geo)
+
         date_str   = target_date.strftime("%d/%m/%Y")
         end_date   = target_date
         # Compute end date for the tolerance window
@@ -105,7 +114,7 @@ class WebSearchService:
         end_date_str = (target_date + timedelta(days=tolerance)).strftime("%d/%m/%Y")
 
         prompt = (
-            f"Search for cultural events in '{geo}' between {date_str} and {end_date_str}. "
+            f"Search for cultural events in '{geo_txt}' between {date_str} and {end_date_str}. "
             f"User question context: '{user_query}'\n\n"
             f"Search ONLY on these websites: {SITE_FILTER}\n\n"
             f"For each event found, provide:\n"
