@@ -1,6 +1,6 @@
 # app/config.py
 
-import os
+import os, re 
 import json
 import logging
 from pathlib import Path
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 
 # ============= STRING NORMALIZATION =============
 
-def normalize_str(text: str) -> str:
+def normalize_location_name(text: str) -> str:
     """
     Normalizes a string for OData filtering and comparison:
     lowercases, strips, removes accents, replaces hyphens/slashes with spaces.
@@ -90,7 +90,10 @@ def normalize_str(text: str) -> str:
     for char, chars in accents.items():
         for c in chars:
             s = s.replace(c, char)
-    return s
+    text = re.sub(r'\bste\b', 'sainte', s)
+    text = re.sub(r'\bst\b',  'saint',  s)
+
+    return text
 
 
 # ============= GEOGRAPHIC REFERENCE DATA =============
@@ -118,12 +121,37 @@ def warm_location_cache() -> None:
     """
     cities, depts = get_unique_locations()
     _location_cache["cities"] = cities
-    _location_cache["depts"]  = depts
+    _location_cache["depts"]  =  clean_departments(depts)
     _location_cache["loaded"] = True
     logger.info(
         f"Location cache warmed: {len(cities)} cities, {len(depts)} departments."
     )
 
+def clean_departments(depts: List[str]) -> List[str]:
+    """
+    Cleans the department list by:
+      - Removing entries that contain digits (e.g. '11 - Aude', '75001')
+      - Deduplicating case-insensitively (keeps the first occurrence)
+      - Capitalizing each entry (e.g. 'creuse' → 'Creuse')
+
+    Args:
+        depts (List[str]): Raw department list.
+
+    Returns:
+        List[str]: Cleaned, deduplicated and capitalized department list.
+    """
+    import re
+    seen = set()
+    result = []
+    for d in depts:
+        if re.search(r'\d', d):
+            continue
+        key = normalize_location_name(d)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(d.strip().title())
+    return sorted(result)
 
 def get_unique_locations() -> Tuple[List[str], List[str]]:
     """
