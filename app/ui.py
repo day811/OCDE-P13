@@ -205,7 +205,7 @@ async def main(message: cl.Message):
     # ── Single collapsible parent step ─────────────────────────────────────────
     # All pipeline steps are nested inside this parent.
     # It collapses once the LLM answer begins streaming.
-    async with cl.Step(name="⚙️ Analyse en cours...", type="run") as parent_step:
+    async with cl.Step(name="⚙️ Analyse en cours...", type="run", default_open=True) as parent_step:
 
         res_msg = cl.Message(content="")
 
@@ -241,9 +241,12 @@ async def main(message: cl.Message):
                     async with cl.Step(
                         name=name,
                         type="run",
-                        parent_id=parent_step.id
+                        parent_id=parent_step.id,
+                        default_open= True,
+                        auto_collapse=False
                     ) as child_step:
                         child_step.output = content
+                        await child_step.update()
 
             # ── String chunk: LLM token streaming ──────────────────────────
             elif isinstance(chunk, str):
