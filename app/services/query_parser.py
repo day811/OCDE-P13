@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from calendar import monthrange
 from typing import Optional, Dict, Tuple, List
-from app.config import normalize_str
+from app.config import normalize_location_name
 
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class QueryParser:
 
         months = ['janvier', 'fevrier', 'mars', 'avril', 'mai', 'juin', 
                   'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre']
-        normalized_query = normalize_str(query) # Fix: Handle accents like "fevrier" 
+        normalized_query = normalize_location_name(query) # Fix: Handle accents like "fevrier" 
         
         today = datetime.now()
         
@@ -172,13 +172,13 @@ class QueryParser:
                 'cleaned': str  # query with geo spans removed
             }
         """
-        q = normalize_str(query)
+        q = normalize_location_name(query)
         cleaned_q = q
         found_city = None
         found_dept = None
 
         for city in self.cities:
-            norm_city = normalize_str(city)
+            norm_city = normalize_location_name(city)
             pattern   = self._build_geo_pattern(norm_city)
             match     = re.search(pattern, q)
             if match:
@@ -187,7 +187,7 @@ class QueryParser:
                 break
 
         for dept in self.departments:
-            norm_dept = normalize_str(dept)
+            norm_dept = normalize_location_name(dept)
             pattern   = self._build_geo_pattern(norm_dept)
             match     = re.search(pattern, q)
             if match:
