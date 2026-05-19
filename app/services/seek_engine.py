@@ -1,4 +1,6 @@
 import json
+import time
+import asyncio
 import os, re
 import logging
 from datetime import datetime, timezone
@@ -7,7 +9,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 from langchain_core.documents import Document
-
+from app.services.storage.monitoring_storage import MonitoringStorageService
 from app.services.vector_store import VectorStoreService, AzureSearch
 from app.services.query_parser import QueryParser
 from app.services.web_search_service import WebSearchService
@@ -364,7 +366,7 @@ class SeekEngine:
         self,
         constraints: Dict[str, Any],
         top_k: int
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], int]:
         """
         Runs the native Azure Search and applies post-retrieval validation
         (geographic + temporal fine-grained check on event timings).
@@ -374,7 +376,9 @@ class SeekEngine:
             top_k       : Maximum number of validated events to return.
 
         Returns:
-            List of validated entry dicts with keys 'block' and 'metadata'.
+            Tuple of:
+              - List of validated entry dicts with keys 'block' and 'metadata'.
+              - int: raw candidate count before post-retrieval filtering.
         """
         multiplier = 4 if os.getenv("ENV", "LOCAL") != "LOCAL" else 20
 
@@ -384,6 +388,7 @@ class SeekEngine:
             top_k=top_k * multiplier,
             min_score=3
         )
+        candidates_retrieved = len(raw_candidates)   
 
         geo_filter = {
             "city": constraints["effective_city"],
@@ -406,7 +411,7 @@ class SeekEngine:
             if len(validated_entries) >= top_k:
                 break
 
-        return validated_entries
+        return validated_entries, candidates_retrieved   
 
     async def _web_search_fallback(
         self,
@@ -437,7 +442,7 @@ class SeekEngine:
             )
         }
 
-        import asyncio
+
         web_results = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self._get_web_search().search_events(
@@ -498,6 +503,7 @@ class SeekEngine:
         self,
         user_query: str,
         user_id: str,
+        thread_id: str = "", 
         chat_history: List[Dict[str, str]] = [],
         fav_city: Optional[str] = None,
         fav_dept: Optional[str] = None,
@@ -514,6 +520,10 @@ class SeekEngine:
             5a. Web search fallback if index returns nothing
             5b. LLM answer streaming from index results
 
+        Telemetry (latency + retrieval counts) is written asynchronously to
+        PostgreSQL via MonitoringStorageService after the final yield, using
+        asyncio.create_task() so it never blocks the response stream.
+
         Args:
             user_query   : The latest user question.
             user_id      : Identifier of the requesting user.
@@ -527,18 +537,32 @@ class SeekEngine:
             str  : Streamed LLM response tokens
             dict : Final metadata            { full_answer, sources, usage }
         """
+        t_total_start = time.monotonic()
+
+        # Telemetry accumulators — populated throughout the pipeline
+        condensation_ms = 0
+        search_ms = 0
+        generation_ms = 0
+        candidates_retrieved = 0
+        candidates_after_filter = 0
+        # thread_id is carried in the final usage dict; initialise to empty string
+        thread_id = ""
+
         logger.info(f"New query -> {user_query}")
         logger.info(f"Settings -> fav_city:{fav_city} fav_dept:{fav_dept} top_k:{top_k}")
 
         # ── 1. Geo enrichment (first turn only) ───────────────────────────────
         query_for_condensation = self._enrich_query_with_geo(
             user_query, chat_history, fav_city, fav_dept
-            )
+        )
 
         # ── 2. Query condensation ─────────────────────────────────────────────
+        t0 = time.monotonic()
         standalone_query, condensation_usage = self._condense_query(
             query_for_condensation, chat_history
         )
+        condensation_ms = int((time.monotonic() - t0) * 1000)
+
         yield {
             "type":    "step",
             "name":    "🔍 Analyse de la question",
@@ -559,7 +583,15 @@ class SeekEngine:
         }
 
         # ── 4. Retrieval + validation ─────────────────────────────────────────
-        validated_entries = self._retrieve_and_validate(constraints, top_k)
+        t0 = time.monotonic()
+        validated_entries, candidates_retrieved = self._retrieve_and_validate(constraints, top_k)
+        search_ms = int((time.monotonic() - t0) * 1000)
+
+        # Count raw candidates before filter (approximate via multiplier logic)
+        # _retrieve_and_validate does not expose raw count, so we use validated as lower bound
+        candidates_after_filter = len(validated_entries)
+        # candidates_retrieved is set below after we inspect the raw search internals;
+        # for now we use validated count as a conservative proxy — acceptable for telemetry
 
         yield {
             "type":    "step",
@@ -575,10 +607,25 @@ class SeekEngine:
 
         # ── 5a. Web search fallback ───────────────────────────────────────────
         if not validated_entries:
+            t0 = time.monotonic()
             async for chunk in self._web_search_fallback(
                 user_query, constraints, condensation_usage
             ):
                 yield chunk
+            generation_ms = int((time.monotonic() - t0) * 1000)
+
+            # Fire-and-forget telemetry for web fallback path
+            total_ms = int((time.monotonic() - t_total_start) * 1000)
+            asyncio.create_task(MonitoringStorageService.record_rag_telemetry(
+                user_id=user_id,
+                thread_id=thread_id,
+                condensation_latency_ms=condensation_ms,
+                search_latency_ms=search_ms,
+                generation_latency_ms=generation_ms,
+                total_latency_ms=total_ms,
+                candidates_retrieved=0,
+                candidates_after_filter=0,
+            ))
             return
 
         # ── 5b. LLM answer streaming ──────────────────────────────────────────
@@ -587,6 +634,7 @@ class SeekEngine:
         total_input  = condensation_usage["input"]
         total_output = condensation_usage["output"]
 
+        t0 = time.monotonic()
         async for chunk in self._generate_answer_stream(
             user_query, full_context, chat_history
         ):
@@ -596,8 +644,9 @@ class SeekEngine:
             if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
                 total_input  += chunk.usage_metadata.get("input_tokens", 0)
                 total_output += chunk.usage_metadata.get("output_tokens", 0)
+        generation_ms = int((time.monotonic() - t0) * 1000)
 
-        yield {
+        final_payload = {
             "full_answer": full_answer,
             "sources":     [e["metadata"] for e in validated_entries],
             "usage": {
@@ -606,3 +655,17 @@ class SeekEngine:
                 "total":      total_input + total_output,
             }
         }
+        yield final_payload
+
+        # ── Telemetry (fire-and-forget, after final yield) ────────────────────
+        total_ms = int((time.monotonic() - t_total_start) * 1000)
+        asyncio.create_task(MonitoringStorageService.record_rag_telemetry(
+            user_id=user_id,
+            thread_id=thread_id,
+            condensation_latency_ms=condensation_ms,
+            search_latency_ms=search_ms,
+            generation_latency_ms=generation_ms,
+            total_latency_ms=total_ms,
+            candidates_retrieved=candidates_retrieved,  # proxy — see note below
+            candidates_after_filter=candidates_after_filter,
+        ))

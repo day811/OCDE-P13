@@ -212,6 +212,7 @@ async def main(message: cl.Message):
         async for chunk in engine.search(
             user_query=message.content,
             user_id=user.identifier,
+            thread_id=cl.context.session.thread_id or "",
             chat_history=history,
             fav_city=user_settings.get("favorite_city"),
             fav_dept=user_settings.get("favorite_dept"),
