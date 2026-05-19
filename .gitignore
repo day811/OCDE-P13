@@ -5,7 +5,7 @@ data/*
 ~lock.*
 chunks.json
 .vscode/*
-scripts/*
+
 .files/*
 .chainlit/*
 
