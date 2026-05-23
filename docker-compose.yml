@@ -11,7 +11,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s 
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      # Override SERVICE so entrypoint.sh routes to the ingestor branch
+      SERVICE: api
     ports:
       - "8000:8000"
 
@@ -20,11 +22,21 @@ services:
     build: .
     env_file:
       - .env  # Injecte les variables du fichier .env dans le conteneur
-    command: chainlit run app/ui.py --host 0.0.0.0 --port 8001
+    environment:
+      SERVICE: ui
     ports:
       - "8001:8001"
     depends_on:
       api:
         condition: service_healthy
 
-  # 3. Le pipeline d'ingestion (Script ponctuel)
+  # 3. Ingestor job — mirrors the Azure Container App Job
+  ingestor:
+    build: .
+    env_file:
+      - .env
+    environment:
+      SERVICE: ingestor
+    # Inherits CMD from Dockerfile (entrypoint.sh), SERVICE env var drives routing
+    profiles:
+      - ingestor   # Only started explicitly; does not run with `docker compose up`
