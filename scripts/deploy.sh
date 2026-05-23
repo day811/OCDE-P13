@@ -29,25 +29,48 @@ ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --query username -o tsv
 ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].value" -o tsv)
 az acr login --name "$ACR_NAME"
 
-docker build -t "$ACR_SERVER/pulsevents-api:latest" .
+# Use a timestamped tag to guarantee Azure pulls the new image
+IMAGE_TAG=$(date +%Y%m%d%H%M%S)
+
+# Build once, tag twice (same Dockerfile, SERVICE env var drives behaviour)
+docker build -t "$ACR_SERVER/pulsevents-api:latest" \
+             -t "$ACR_SERVER/pulsevents-api:$IMAGE_TAG" \
+             -t "$ACR_SERVER/pulsevents-ui:latest" \
+             -t "$ACR_SERVER/pulsevents-ui:$IMAGE_TAG" .
+
 docker push "$ACR_SERVER/pulsevents-api:latest"
-echo "✅ Image pushed: pulsevents-api"
-
-# UI uses the same Dockerfile, different start command
-docker build -t "$ACR_SERVER/pulsevents-ui:latest" .
+docker push "$ACR_SERVER/pulsevents-api:$IMAGE_TAG"
 docker push "$ACR_SERVER/pulsevents-ui:latest"
-echo "✅ Image pushed: pulsevents-ui"
+docker push "$ACR_SERVER/pulsevents-ui:$IMAGE_TAG"
+
+echo "✅ Images pushed with tags: latest + $IMAGE_TAG"
+
+# ...
+# (sections 4, 5, 6 : az containerapp create — inchangées)
+# ...
+
+# ── 8. Force update all running services with the new versioned tag ──
+echo ""
+echo "🔄 Updating Container Apps to image tag: $IMAGE_TAG"
 
 az containerapp update \
-    --name pulsevents-api \
-    --resource-group OpenClassrooms_P13 \
-    --image acrpulsevents.azurecr.io/pulsevents-api:latest
+    --name "$APP_API" \
+    --resource-group "$RESOURCE_GROUP" \
+    --image "$ACR_SERVER/pulsevents-api:$IMAGE_TAG"
+echo "✅ API updated"
 
 az containerapp update \
-    --name pulsevents-ui \
-    --resource-group OpenClassrooms_P13 \
-    --image acrpulsevents.azurecr.io/pulsevents-ui:latest
+    --name "$APP_UI" \
+    --resource-group "$RESOURCE_GROUP" \
+    --image "$ACR_SERVER/pulsevents-ui:$IMAGE_TAG"
+echo "✅ UI updated"
 
+# Fix: --image was missing for the ingestor job
 az containerapp job update \
-  --name pulsevents-ingestor \
-  --resource-group OpenClassrooms_P13 \
+    --name "$JOB_INGESTOR" \
+    --resource-group "$RESOURCE_GROUP" \
+    --image "$ACR_SERVER/pulsevents-api:$IMAGE_TAG"
+echo "✅ Ingestor job updated"
+
+echo ""
+echo "Image tag deployed: $IMAGE_TAG"
