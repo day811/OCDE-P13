@@ -13,7 +13,13 @@ from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
 from app.services.ingestion_service import IngestionService
 from app.services.storage.monitoring_storage import MonitoringStorageService
-import logging 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,22 +86,27 @@ def _collect_infrastructure_metrics() -> dict:
 
 
 async def main() -> None:
-    """
-    Runs the ingestion pipeline and records the outcome in ingestor_runs.
-    Exit code is non-zero on failure (required by Container App Job retry logic).
-    """
     start = time.monotonic()
     events_fetched = 0
     events_indexed = 0
+    service = None
 
     try:
         service = IngestionService()
         result = await service.run()
 
-        # Adapt to whatever your IngestionService.run() actually returns
-        if isinstance(result, dict):
-            events_fetched = service.stats.get("total_raw", 0)
-            events_indexed = result.get("indexed", 0)
+        logger.info("=== service.run() COMPLETE — result: %s ===", result)
+
+        stats = result if isinstance(result, dict) else getattr(service, "stats", {})
+        logger.info("=== stats resolved: %s ===", stats)
+
+        events_fetched = stats.get("total_raw", 0)
+        events_indexed = stats.get("indexed", 0)
+
+        logger.info(
+            "=== BEFORE record_ingestor_run — fetched=%d indexed=%d ===",
+            events_fetched, events_indexed
+        )
 
         duration = time.monotonic() - start
         status = "success" if events_indexed > 0 else "partial"
@@ -105,23 +116,26 @@ async def main() -> None:
             events_indexed=events_indexed,
             duration_seconds=round(duration, 2),
         )
+        logger.info("=== AFTER record_ingestor_run — status=%s ===", status)
 
     except Exception as exc:
+        logger.exception("=== EXCEPTION in main(): %s ===", exc)
         duration = time.monotonic() - start
         await MonitoringStorageService.record_ingestor_run(
             status="failed",
-            events_fetched=service.stats.get("total_raw", 0) if 'service' in dir() else 0,
-            events_indexed=events_indexed,
+            events_fetched=service.stats.get("total_raw", 0) if service else 0,
+            events_indexed=0,
             duration_seconds=round(duration, 2),
             error_message=str(exc),
         )
-        raise  # non-zero exit → Container App Job marks run as failed
+        raise
 
     finally:
-        # Always collect infra snapshot, even on partial failure
+        logger.info("=== ENTERING FINALLY BLOCK ===")
         infra = _collect_infrastructure_metrics()
+        logger.info("=== infra metrics collected: %s ===", infra)
         await MonitoringStorageService.record_infrastructure_snapshot(**infra)
-
+        logger.info("=== FINALLY BLOCK COMPLETE ===")
 
 if __name__ == "__main__":
     asyncio.run(main())

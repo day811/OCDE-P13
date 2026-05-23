@@ -180,6 +180,7 @@ class IngestionService:
                 
                 for raw_event in raw_events:
                     manifest["stats"]["total_raw"] += 1
+                    self.stats["total_raw"] += 1
                     chunks = self.processor.transform(raw_event)
                     
                     if chunks:
@@ -190,6 +191,7 @@ class IngestionService:
                             self._session_depts.add(meta['location_department'])                            
                         silver_to_save.append(meta)
                         manifest["stats"]["silver_valid"] += 1
+                        self.stats["silver_valid"] = manifest["stats"]["silver_valid"]
                         
                         if self._is_upcoming(chunks[0]['metadata']):
                             indexed_batch.extend(chunks)
@@ -226,3 +228,4 @@ class IngestionService:
                 current_ts = last_ts # type: ignore
         self._update_locations_cache()
         logger.info(f"Ingestion finished: {manifest['stats']}")
+        return self.stats  
