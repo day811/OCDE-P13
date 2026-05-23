@@ -15,6 +15,7 @@
 - [Installation et démarrage local](#-installation-et-démarrage-local)
 - [Déploiement Azure](#-déploiement-azure)
 - [Variables d'environnement](#-variables-denvironnement)
+- [Initialisation des tables PostgreSQL](#-initialisation-des-tables-postgresql)
 - [Tests](#-tests)
 - [Monitoring](#-monitoring)
 - [Dette technique et évolutions](#-dette-technique-et-évolutions)
@@ -36,29 +37,36 @@
 | Persistance | Aucune | PostgreSQL + Azure Blob Storage |
 | Déploiement | Local uniquement | Azure Container Apps (HTTPS public) |
 | Mémoire conversationnelle | Absente | Data layer PostgreSQL + historique |
+| Recherche web fallback | Absente | smolagents + DuckDuckGo (whitelist événementielle) |
+| Télémétrie RAG | Absente | `rag_telemetry` + `infrastructure_snapshots` PostgreSQL |
 
 ### Cas d'usage
 
 - **Recherche directe** : *"Quels sont les concerts de jazz à Toulouse ce week-end ?"*
 - **Recherche personnalisée** : *"Trouve-moi d'autres événements comme celui que j'ai aimé hier"*
+- **Fallback web** : si aucun événement n'est trouvé dans l'index, recherche automatique sur billetweb, eventbrite, openagenda, fnacspectacles…
 - **Démonstration portfolio** : Profil `guest` avec quota journalier (5 questions / 10 000 tokens)
 
 ---
 
 ## ✅ Fonctionnalités
 
-Toutes les fonctionnalités **Must-Have** (classification MoSCoW) ont été livrées :
+Toutes les fonctionnalités **Must-Have** et **Should-Have** de la classification MoSCoW ont été livrées :
 
-| Fonctionnalité | Description technique | Statut |
-|---|---|---|
-| Interface Chainlit | UI conversationnelle, API FastAPI (`/ask`, `/health`) | ✅ Livré |
-| Authentification | Auth par mot de passe, profil `guest` avec quota journalier | ✅ Livré |
-| Pipeline ETL incrémental | Bronze → Silver → Gold, manifest high-watermark, cron Azure | ✅ Livré |
-| Filtrage temporel | `QueryParser` dates relatives, validation post-retrieval Python | ✅ Livré |
-| Mémoire conversationnelle | Data layer PostgreSQL + Chainlit, historique, `on_chat_resume` | ✅ Livré |
-| Déploiement Azure | 3 Container Apps (api, ui, ingestor job), scripts `deploy.sh` | ✅ Livré |
-| Monitoring satisfaction | Grafana Cloud + Azure Monitor + PostgreSQL feedbacks/tokens | ✅ Livré |
-| Cache applicatif | `warm_location_cache()`, `SeekEngine` singleton, `locations.json` | ✅ Livré |
+| Fonctionnalité | Description technique | Priorité | Statut |
+|---|---|---|---|
+| Interface Chainlit | UI conversationnelle, API FastAPI (`/ask`, `/health`) | Must-Have | ✅ Livré |
+| Authentification | Auth par mot de passe, profil `guest` avec quota journalier | Must-Have | ✅ Livré |
+| Pipeline ETL incrémental | Bronze → Silver → Gold, manifest high-watermark, cron Azure | Must-Have | ✅ Livré |
+| Filtrage temporel | `QueryParser` dates relatives, validation post-retrieval Python | Must-Have | ✅ Livré |
+| Mémoire conversationnelle | Data layer PostgreSQL + Chainlit, historique, `on_chat_resume` | Must-Have | ✅ Livré |
+| Déploiement Azure | 3 Container Apps (api, ui, ingestor job), scripts `deploy.sh` | Must-Have | ✅ Livré |
+| Monitoring satisfaction | Grafana Cloud + feedbacks/tokens PostgreSQL | Must-Have | ✅ Livré |
+| Cache applicatif | `warm_location_cache()`, `SeekEngine` singleton, `locations.json` | Must-Have | ✅ Livré |
+| **Recherche web temps réel** | **`WebSearchService` smolagents + DuckDuckGo, whitelist 10 sites événementiels** | **Should-Have** | **✅ Livré** |
+| **Télémétrie RAG** | **`MonitoringStorageService` : latences par étape, taux fallback, snapshots infra** | **Should-Have** | **✅ Livré** |
+
+> La fonctionnalité "Architecture DualIndex" (séparation index passé/futur) reste différée post-MVP.
 
 ---
 
@@ -84,33 +92,52 @@ L'application repose sur une **architecture micro-services conteneurisée** dép
                                     │
          ┌──────────────────────────┼──────────────────────┐
          │                          │                      │
-   ┌─────▼──────┐  ┌────────────────▼──┐  ┌─────────────┐ │
-   │ Azure AI   │  │  Azure OpenAI     │  │ Azure Blob  │ │
-   │ Search     │  │  GPT-4o           │  │ Storage     │ │
-   │ (93k+ docs)│  │  text-embed-3-sm  │  │ Bronze/     │ │
-   └────────────┘  └───────────────────┘  │ Silver/Gold │ │
-                                          └─────────────┘ │
-   ┌──────────────┐  ┌─────────────────┐                  │
-   │ PostgreSQL   │  │ Azure Cosmos DB │                  │
-   │ (Data layer, │  │ (Users &        │                  │
-   │  feedbacks,  │  │  Settings)      │                  │
-   │  tokens)     │  └─────────────────┘                  │
-   └──────────────┘                                        │
-         │                                                  │
-   ┌─────▼──────────────────────────────────────────────┐  │
-   │              Grafana Cloud (Monitoring)             │  │
-   └─────────────────────────────────────────────────────┘  │
+   ┌─────▼──────┐  ┌────────────────▼──┐  ┌─────────────┐
+   │ Azure AI   │  │  Azure OpenAI     │  │ Azure Blob  │
+   │ Search     │  │  GPT-4o           │  │ Storage     │
+   │ (93k+ docs)│  │  text-embed-3-sm  │  │ Bronze/     │
+   └────────────┘  └───────────────────┘  │ Silver/Gold │
+                                          └─────────────┘
+   ┌──────────────┐  ┌─────────────────┐
+   │ PostgreSQL   │  │ Azure Cosmos DB │
+   │ feedbacks    │  │ Users & Settings│
+   │ token_usage  │  └─────────────────┘
+   │ rag_telemetry│
+   │ ingestor_runs│
+   │ infra_snaps  │
+   └──────┬───────┘
+          │
+   ┌──────▼──────────────────────┐
+   │      Grafana Cloud          │
+   │ • Azure Monitor             │
+   │ • PostgreSQL (satisfaction) │
+   │ • PostgreSQL (télémétrie)   │
+   └─────────────────────────────┘
+
+   ┌──────────────────────────────────────────────┐
+   │  DuckDuckGo via smolagents — Web Fallback    │
+   │  Whitelist : billetweb, eventbrite,          │
+   │  openagenda, fnacspectacles, sortiraparis…   │
+   └──────────────────────────────────────────────┘
 ```
 
-### Moteur RAG — SeekEngine
+### Moteur RAG — SeekEngine (pipeline en 6 étapes)
 
-Le moteur de recherche (`SeekEngine`) implémente un pipeline RAG hybride :
+1. **Geo enrichment** : injection de `fav_city` au premier tour si la requête manque de contexte géographique
+2. **Condensation** : reformulation de la question via le LLM en intégrant l'historique (last 10 turns)
+3. **`QueryParser`** : extraction des contraintes temporelles (dates relatives, week-end, mois) et géographiques
+4. **Recherche hybride** : Azure AI Search (vectoriel + BM25) + filtres OData géographiques
+5a. **Web search fallback** (`WebSearchService`) : si l'index retourne zéro résultat validé, un `CodeAgent` smolagents interroge DuckDuckGo restreint à 10 sites événementiels français (`max_steps=3`)
+5b. **Génération streamée** : GPT-4o produit la réponse token par token via `astream()`
+6. **Télémétrie** (fire-and-forget) : `MonitoringStorageService.record_rag_telemetry()` écrit les latences via `asyncio.create_task()` sans bloquer le stream
 
-1. **`QueryParser`** : Extraction des entités temporelles et géographiques depuis la requête naturelle
-2. **Recherche hybride** : Requête vectorielle (embeddings `text-embedding-3-small`) + BM25 sur Azure AI Search
-3. **Validation post-retrieval** : Filtrage Python `_validate_event()` sur les créneaux temporels
-4. **Condensation du contexte** : Réduction de la fenêtre de contexte avant génération
-5. **Streaming de la réponse** : Génération GPT-4o avec `async for chunk`
+### WebSearchService — Whitelist des sites ciblés
+
+```
+openagenda.com    billetweb.fr      eventbrite.fr
+fnacspectacles.com  sortiraparis.com  sortirtoulouse.com
+sortirabordeaux.com  agendaculturel.fr  tourisme.fr  france.fr
+```
 
 ---
 
@@ -130,11 +157,13 @@ OpenAgenda API
 └──────────┘     └──────────┘     └──────────┘
     Source          EventProcessor    SeekEngine
   immuable          (validation)      (indexation)
+      │                                    │
+      └──────────────────┬─────────────────┘
+                         ▼
+              MonitoringStorageService
+              infrastructure_snapshots
+              (Grafana: suivi croissance index)
 ```
-
-- **Bronze** : Données brutes OpenAgenda, source de vérité immuable
-- **Silver** : Événements validés par `EventProcessor` (Pydantic), un fichier JSONL par batch
-- **Gold** : Index Azure AI Search avec embeddings vectoriels, manifest high-watermark pour l'incrémental
 
 ---
 
@@ -149,8 +178,10 @@ OpenAgenda API
 | **LLM** | Azure OpenAI GPT-4o | — |
 | **Embeddings** | text-embedding-3-small | — |
 | **Index vectoriel** | Azure AI Search | Basic tier |
+| **Recherche web fallback** | smolagents + DuckDuckGoSearchTool | — |
 | **Pipeline ETL** | Python + Pydantic | — |
-| **Persistance conversations** | PostgreSQL (asyncpg) | Flexible B1ms |
+| **Persistance conversations** | PostgreSQL asyncpg | Flexible B1ms |
+| **Télémétrie RAG** | asyncpg → `rag_telemetry` / `infrastructure_snapshots` | — |
 | **Stockage utilisateurs** | Azure Cosmos DB | Serverless |
 | **Stockage objets** | Azure Blob Storage | Standard v2 |
 | **Conteneurisation** | Docker | — |
@@ -167,44 +198,45 @@ OpenAgenda API
 OCDE-P13/
 │
 ├── app/
-│   ├── api/                    # FastAPI routes (/ask, /health, /settings)
+│   ├── core/                          # FastAPI routes (/ask, /health, /settings)
+│   │   └── llm_factory.py        # Factory pattern LLM (LOCAL vs AZURE)
+│   │   ├── embedding_factory.py  # Factory pattern Embeddings (LOCAL vs AZURE)
 │   ├── services/
-│   │   ├── seek_engine.py      # Core RAG engine (SeekEngine)
-│   │   ├── query_parser.py     # Temporal & geographic entity extraction
-│   │   ├── processor.py        # EventProcessor (Bronze → Silver)
-│   │   ├── indexer.py          # Azure AI Search indexation (Silver → Gold)
-│   │   ├── ingestor.py         # ETL orchestration with high-watermark manifest
-│   │   ├── llm/
-│   │   │   └── llm_factory.py  # Factory pattern LLM/Embeddings (LOCAL vs AZURE)
+│   │   ├── seek_engine.py            # Core RAG engine (SeekEngine, pipeline 6 étapes)
+│   │   ├── query_parser.py           # Temporal & geographic entity extraction
+│   │   ├── processor.py              # EventProcessor (Bronze → Silver)
+│   │   ├── indexer.py                # Azure AI Search indexation (Silver → Gold)
+│   │   ├── ingestion_service.py      # ETL orchestration, high-watermark manifest
+│   │   ├── web_search_service.py     # ← NEW : smolagents fallback DuckDuckGo
 │   │   └── storage/
 │   │       ├── storage_base.py
 │   │       ├── azure_provider.py
 │   │       ├── local_provider.py
 │   │       ├── storage_factory.py
-│   │       └── chainlit_storage.py  # Chainlit data layer (Azure Blob)
+│   │       ├── chainlit_storage.py   # Chainlit data layer (Azure Blob)
+│   │       └── monitoring_storage.py # MonitoringStorageService (asyncpg)
 │   └── schemas/
-│       └── event.py            # Pydantic EventSchema (Silver layer)
+│       └── event.py                  # Pydantic EventSchema (Silver layer)
 │
-├── ui.py                       # Chainlit entrypoint (chat handlers)
-├── main.py                     # FastAPI entrypoint
-├── Dockerfile                  # Multi-service Docker image
-├── entrypoint.sh               # Service selector (api | ui | ingestor)
-├── docker-compose.yml          # Local multi-service stack
-├── azure_deploy.sh             # Azure Container Apps deployment script
+├── ui.py                             # Chainlit entrypoint (chat handlers + step UI)
+├── main.py                           # FastAPI entrypoint
+├── ingest_pipeline.py                # Ingestor + _collect_infrastructure_metrics()
+├── Dockerfile
+├── entrypoint.sh                     # Service selector (api | ui | ingestor)
+├── docker-compose.yml
+├── azure_deploy.sh
 ├── requirements.txt
-│
 ├── tests/
-│   ├── test_processor_unit.py  # Unit tests — EventProcessor
-│   ├── test_seek_engine.py     # Unit tests — SeekEngine
-│   └── test_api_integration.py # Integration tests — FastAPI endpoints
+│   ├── test_processor_unit.py        # Unit tests — EventProcessor
+│   ├── test_seek_engine.py           # Unit tests — SeekEngine
+│   ├── test_api_integration.py       # Integration tests — FastAPI endpoints
+│   └── test_azure_index.py           # Vérification index Azure AI Search
 │
-├── scripts/
-│   └── create_user.py          # CLI user creation (Cosmos DB)
-│
-├── data/
-│   └── locations.json          # Gold layer location cache
-│
-└── .env.example                # Environment variables template
+└── scripts/
+    ├── azure_deploy.sh                # CLI user creation (Cosmos DB)
+    ├── create_user.py                # CLI user creation (Cosmos DB)
+    └── test_infra_snapshot.py        # ← NEW : test collecte métriques infra
+ 
 ```
 
 ---
@@ -220,7 +252,7 @@ OCDE-P13/
 ### 1. Cloner le dépôt
 
 ```bash
-git clone https://github.com/<username>/OCDE-P13.git
+git clone https://github.com/day811/OCDE-P13.git
 cd OCDE-P13
 ```
 
@@ -242,11 +274,8 @@ L'API sera disponible sur `http://localhost:8000` et l'UI Chainlit sur `http://l
 ### 4. Démarrage sans Docker
 
 ```bash
-# Créer un environnement virtuel
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Installer les dépendances
 pip install -r requirements.txt
 
 # Démarrer l'API
@@ -260,7 +289,7 @@ SERVICE=ui chainlit run ui.py --port 8001
 
 ```bash
 python scripts/create_user.py -u mon_utilisateur -p mon_mot_de_passe -r user
-# Pour un compte guest avec quota :
+# Compte guest avec quota journalier :
 python scripts/create_user.py -u demo -p demo123 -r guest
 ```
 
@@ -268,19 +297,9 @@ python scripts/create_user.py -u demo -p demo123 -r guest
 
 ## ☁️ Déploiement Azure
 
-Le script `azure_deploy.sh` automatise le déploiement complet :
-
 ```bash
-# S'assurer que le fichier .env est configuré avec tous les secrets Azure
 bash azure_deploy.sh
 ```
-
-Le script réalise les étapes suivantes :
-1. Chargement du fichier `.env`
-2. Récupération des credentials ACR
-3. Build et push des images Docker vers Azure Container Registry
-4. Déploiement ou mise à jour des 3 Container Apps (`api`, `ui`, `ingestor`)
-5. Affichage de l'URL publique HTTPS de l'interface
 
 Pour lancer manuellement le job d'ingestion :
 
@@ -298,32 +317,66 @@ az containerapp logs show --name pulsevents-ui --resource-group OpenClassrooms_P
 
 ## 🔑 Variables d'environnement
 
-Copier `.env.example` en `.env` et renseigner toutes les valeurs :
-
 | Variable | Service(s) | Description |
 |---|---|---|
 | `AZURE_OPENAI_ENDPOINT` | api, ui | Endpoint Azure OpenAI |
 | `AZURE_OPENAI_API_KEY` | api, ui | Clé API Azure OpenAI |
+| `AZURE_OPENAI_DEPLOYMENT` | api, ui | Nom du déploiement GPT-4o (ex. `gpt-4o`) |
+| `AZURE_OPENAI_API_VERSION` | api, ui | Version de l'API (ex. `2024-02-15-preview`) |
 | `AZURE_SEARCH_ENDPOINT` | api, ui, ingestor | Endpoint Azure AI Search |
 | `AZURE_SEARCH_API_KEY` | api, ui, ingestor | Clé API Azure AI Search |
+| `AZURE_SEARCH_INDEX_NAME` | api, ui, ingestor | Nom de l'index (ex. `puls-events-index`) |
+| `AZURE_EMBEDDING_DEPLOYMENT` | api, ingestor | Nom du déploiement embedding |
 | `COSMOS_ENDPOINT` | api, ui | Endpoint Azure Cosmos DB |
 | `COSMOS_KEY` | api, ui | Clé Cosmos DB |
 | `AZURE_STORAGE_CONNECTION_STRING` | tous | Connection string Blob Storage |
-| `DATABASE_URL` | ui | `postgresql+asyncpg://...` PostgreSQL |
-| `CHAINLIT_AUTH_SECRET` | ui | Secret JWT Chainlit (générer avec `openssl rand -hex 32`) |
-| `SERVICE` | tous | Sélecteur de service : `api` \| `ui` \| `ingestor` |
+| `DATABASE_URL` | ui, ingestor | `postgresql+asyncpg://...` PostgreSQL |
+| `CHAINLIT_AUTH_SECRET` | ui | Secret JWT Chainlit (`openssl rand -hex 32`) |
+| `SERVICE` | tous | `api` \| `ui` \| `ingestor` |
 | `ENV` | tous | `LOCAL` (FAISS + Gemini) \| `AZURE` (Azure AI Search + GPT-4o) |
+| `MAX_RECORDS` | ingestor | Limite d'événements par run ETL |
+| `OPENAGENDA_URL` | ingestor | URL de l'API OpenAgenda |
+
+---
+
+## 🗃️ Initialisation des tables PostgreSQL
+
+Avant le premier démarrage en production, exécuter la migration de monitoring :
+
+```bash
+psql $DATABASE_URL -f migrations/migration_monitoring.sql
+```
+
+Ce script crée les tables suivantes en complément des tables natives Chainlit :
+
+| Table | Rôle | Écrit par |
+|---|---|---|
+| `feedbacks` | Votes 👍/👎 par réponse | Chainlit natif |
+| `token_usage` | Tokens consommés par session | Chainlit natif |
+| `rag_telemetry` | Latences par étape RAG + flag fallback web | `MonitoringStorageService` |
+| `ingestor_runs` | Historique ETL (status, events, durée) | `MonitoringStorageService` |
+| `infrastructure_snapshots` | Taille Bronze/Silver/Gold + stats index | `MonitoringStorageService` |
+
+### Tester la collecte d'une snapshot d'infrastructure
+
+```bash
+python scripts/test_infra_snapshot.py
+# Vérifie la table infrastructure_snapshots dans Grafana
+```
 
 ---
 
 ## 🧪 Tests
 
 ```bash
-# Lancer tous les tests
+# Tous les tests
 python -m pytest tests/ -v
 
-# Tests unitaires uniquement
+# Tests unitaires
 python -m pytest tests/test_processor_unit.py tests/test_seek_engine.py -v
+
+# Vérification de l'index Azure AI Search
+python tests/test_azure_index.py
 
 # Tests d'intégration (nécessite les services Azure)
 python -m pytest tests/test_api_integration.py -v
@@ -333,12 +386,12 @@ python -m pytest tests/test_api_integration.py -v
 
 ## 📊 Monitoring
 
-Le monitoring est centralisé dans **Grafana Cloud** avec deux datasources :
+Le monitoring est centralisé dans **Grafana Cloud** avec trois datasources :
 
-- **Azure Monitor** : CPU, mémoire, requêtes HTTP, nombre de replicas (dashboards IDs 16591 et 16592)
-- **PostgreSQL** : Taux de satisfaction (feedback 👍/👎) et consommation de tokens par session
+### 1. Azure Monitor
+Dashboards natifs Container Apps (IDs 16591 et 16592) : CPU, mémoire, requêtes HTTP, replicas.
 
-### Métriques de satisfaction (requête PostgreSQL)
+### 2. PostgreSQL — Satisfaction & tokens (tables Chainlit)
 
 ```sql
 SELECT
@@ -350,8 +403,29 @@ SELECT
     ) AS satisfaction_pct
 FROM feedbacks f
 JOIN threads t ON f."threadId" = t."id"
-GROUP BY 1
-ORDER BY 1;
+GROUP BY 1 ORDER BY 1;
+```
+
+### 3. PostgreSQL — Télémétrie RAG & infrastructure
+
+```sql
+-- Latences moyennes et taux de fallback web par heure
+SELECT
+    DATE_TRUNC('hour', created_at),
+    AVG(condensation_latency_ms)  AS avg_condensation_ms,
+    AVG(search_latency_ms)        AS avg_search_ms,
+    AVG(generation_latency_ms)    AS avg_generation_ms,
+    AVG(total_latency_ms)         AS avg_total_ms,
+    SUM(CASE WHEN query_had_zero_results THEN 1 ELSE 0 END) AS web_fallback_count
+FROM rag_telemetry
+GROUP BY 1 ORDER BY 1;
+
+-- Croissance de l'index au fil des ingestions
+SELECT created_at,
+       index_document_count,
+       index_storage_bytes / 1048576.0 AS index_mb
+FROM infrastructure_snapshots
+ORDER BY created_at;
 ```
 
 ---
@@ -363,15 +437,14 @@ ORDER BY 1;
 | Item | Cause | Compensation actuelle |
 |---|---|---|
 | Reprocessing Bronze→Silver incomplet | Bug `silver_name` fixe écrasant le fichier | Script correctif développé, à exécuter |
-| Filtre OData `last_date` non fonctionnel | Type mismatch `Edm.DateTimeOffset` Azure Search | Validation post-retrieval Python |
-| Champs `facetable` manquants | `location_city` / `location_department` non indexés | Réindexation nécessaire |
+| Filtre OData `last_date` non fonctionnel | Type mismatch `Edm.DateTimeOffset` Azure Search | Validation post-retrieval Python `_validate_event()` |
+| Champs `facetable` manquants | `location_city` / `location_department` non indexés | Réindexation nécessaire pour activer les facets Grafana |
 
 ### Évolutions prioritaires post-MVP
 
-- **Recherche web temps réel** : Intégration `smolagents` / Hugging Face
-- **Architecture DualIndex** : Séparation index passé/futur (FAISS + Azure AI Search)
-- **Application Insights** : Traces distribuées et alertes automatiques Azure
-- **CI/CD GitHub Actions** : Build / push / deploy automatisés au merge sur `main`
+- **Architecture DualIndex** : séparation index passé/futur pour optimiser la pertinence temporelle
+- **Application Insights** : traces distribuées et alertes automatiques Azure
+- **CI/CD GitHub Actions** : build / push / deploy automatisés au merge sur `main`
 
 ---
 
@@ -389,7 +462,7 @@ ORDER BY 1;
 | Grafana Cloud | Free tier (10k métriques, 50 Go logs) | 0 € |
 | **TOTAL ESTIMÉ** | | **~115–140 €/mois** |
 
-> **Optimisations actives** : scale-to-zero Container Apps, `text-embedding-3-small`, cache applicatif `SeekEngine` singleton, ingestor job planifié (non continu).
+> **Optimisations actives** : scale-to-zero Container Apps, `text-embedding-3-small`, cache applicatif `SeekEngine` singleton, ingestor job planifié, télémétrie fire-and-forget (`asyncio.create_task()`).
 
 ---
 
@@ -399,4 +472,4 @@ Projet réalisé dans le cadre du parcours **Data Engineer** — OpenClassrooms 
 
 ---
 
-*Puls-Events MVP — OCDE-P13 | Data Engineer en alternance*
+*Puls-Events MVP — OCDE-P13 | github.com/day811/OCDE-P13*
