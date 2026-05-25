@@ -1,6 +1,8 @@
 import argparse
 import logging
 from dotenv import load_dotenv
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.services.storage.user_storage import UserStorageService
 
 # Configuration du logging
