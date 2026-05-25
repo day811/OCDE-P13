@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 
 from app.services.processor import EventProcessor
 from app.services.vector_store import VectorStoreService
-from app.services.storage.storage_factory import StorageFactory
+from app.core.storage_factory import StorageFactory
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class IngestionService:
         geo_filter = 'location_countrycode = "FR"' if self.env == "AZURE" else 'location_region = "Occitanie"'
         
         params = {
-            "where": f'updatedat >= "{after_ts}" AND {geo_filter}', # 
+            "where": f'updatedat > "{after_ts}" AND {geo_filter}', # 
             "order_by": "updatedat ASC",
             "limit": self.page_size,
             "offset": offset
@@ -206,6 +206,7 @@ class IngestionService:
 
                 if indexed_batch:
                     self.vector_store.add_events(indexed_batch)
+                    self.stats["indexed"] += len(indexed_batch) 
 
                 session_processed += len(raw_events)
                 

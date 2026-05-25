@@ -119,9 +119,7 @@ class VectorStoreService:
             if store:
                 # Azure Search automatically handles upserts if the 'uid' is the document key
                 store.add_texts(texts, metadatas=metadatas)
-                count = len(transformed_events)
-                self.stats["indexed"] += count          
-                logger.info(f"Azure Layer: Upserted {count} events.")
+                logger.info(f"Azure Layer: Upserted {len(transformed_events)} events.")
         else:
             if store: 
                 # Add new/updated versions to the already loaded store 

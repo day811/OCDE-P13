@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 
 import asyncpg
 
-from app.services.storage.storage_factory import StorageFactory
+from app.core.storage_factory import StorageFactory
 
 logger = logging.getLogger(__name__)
 
